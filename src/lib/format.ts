@@ -36,5 +36,12 @@ export function truncate(s: string, max = 60): string {
 }
 
 export function percent(frac: number): string {
-  return `${(frac * 100).toFixed(frac > 0 && frac < 0.01 ? 2 : 0)}%`;
+  const pct = frac * 100;
+  // Never round a non-zero value down to 0% or a sub-100 value up to 100% —
+  // "100% null" next to thousands of values reads as a bug.
+  if (pct <= 0) return '0%';
+  if (pct >= 100) return '100%';
+  if (pct < 1) return '<1%';
+  if (pct > 99) return '>99%';
+  return `${Math.round(pct)}%`;
 }

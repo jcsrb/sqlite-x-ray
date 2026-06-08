@@ -1,5 +1,6 @@
 import type { Database } from 'sql.js';
 import { queryAll, queryScalar, ident } from './db';
+import { percent } from './format';
 import type {
   ColumnKind,
   ColumnProfile,
@@ -495,7 +496,7 @@ function computeFindings(db: Database, tables: TableProfile[]): Finding[] {
       } else if (c.distinctCount === 1) {
         findings.push({ severity: 'info', kind: 'constant', table: t.name, column: c.name, message: `${t.name}.${c.name} has a single constant value` });
       } else if (c.nullFraction >= HIGH_NULL) {
-        findings.push({ severity: 'warn', kind: 'high-null', table: t.name, column: c.name, message: `${t.name}.${c.name} is ${Math.round(c.nullFraction * 100)}% null` });
+        findings.push({ severity: 'warn', kind: 'high-null', table: t.name, column: c.name, message: `${t.name}.${c.name} is ${percent(c.nullFraction)} null` });
       }
       if (c.storageTypes > 1) {
         findings.push({ severity: 'warn', kind: 'mixed-type', table: t.name, column: c.name, message: `${t.name}.${c.name} mixes ${c.storageTypes} storage types`, detail: 'values stored as different SQLite types' });
