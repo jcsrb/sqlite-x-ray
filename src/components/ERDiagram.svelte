@@ -41,6 +41,7 @@
       return { name: t.name, x: Math.cos(a) * R, y: Math.sin(a) * R, vx: 0, vy: 0, w, h: 40, rows: t.rowCount, self: selfRefs.has(t.name) };
     });
     simulate(ns, edges);
+    resolveOverlaps(ns);
 
     // Fit to a viewBox with padding.
     const pad = 40;
@@ -52,42 +53,70 @@
     nodes = ns;
   }
 
-  // Compact Fruchterman–Reingold-style layout.
+  // Compact Fruchterman–Reingold-style layout (rough placement).
   function simulate(ns: Node[], es: Edge[]) {
     const byName = new Map(ns.map((n) => [n.name, n]));
-    const ideal = 220; // ideal edge length
-    for (let iter = 0; iter < 320; iter++) {
-      const temp = 1 - iter / 320;
-      // repulsion
+    const ideal = 260; // ideal edge length (center-to-center)
+    for (let iter = 0; iter < 400; iter++) {
+      const temp = 1 - iter / 400;
+      // repulsion (all pairs)
       for (let i = 0; i < ns.length; i++) {
         for (let j = i + 1; j < ns.length; j++) {
           const a = ns[i], b = ns[j];
           let dx = a.x - b.x, dy = a.y - b.y;
-          let d2 = dx * dx + dy * dy || 1;
-          const f = (ideal * ideal) / d2;
+          const d2 = dx * dx + dy * dy || 1;
           const d = Math.sqrt(d2);
+          const f = (ideal * ideal) / d2;
           dx /= d; dy /= d;
           a.vx += dx * f; a.vy += dy * f;
           b.vx -= dx * f; b.vy -= dy * f;
         }
       }
-      // attraction along edges
+      // attraction along edges (spring toward ideal length)
       for (const e of es) {
         const a = byName.get(e.from), b = byName.get(e.to);
         if (!a || !b) continue;
         let dx = a.x - b.x, dy = a.y - b.y;
         const d = Math.sqrt(dx * dx + dy * dy) || 1;
-        const f = (d * d) / ideal;
+        const f = (d - ideal) * 0.5;
         dx /= d; dy /= d;
         a.vx -= dx * f; a.vy -= dy * f;
         b.vx += dx * f; b.vy += dy * f;
       }
-      // integrate with cooling + mild centering
+      // integrate with cooling; tiny centering just to bound stray nodes
       for (const n of ns) {
-        n.x += Math.max(-30, Math.min(30, n.vx)) * temp * 0.08 - n.x * 0.002;
-        n.y += Math.max(-30, Math.min(30, n.vy)) * temp * 0.08 - n.y * 0.002;
+        n.x += Math.max(-40, Math.min(40, n.vx)) * temp * 0.05 - n.x * 0.0008;
+        n.y += Math.max(-40, Math.min(40, n.vy)) * temp * 0.05 - n.y * 0.0008;
         n.vx = 0; n.vy = 0;
       }
+    }
+  }
+
+  // Guarantee no two rectangles overlap by pushing them apart along the axis of
+  // least penetration. Runs after the force pass, which only knows about centers.
+  function resolveOverlaps(ns: Node[]) {
+    const mx = 28, my = 18; // breathing room between boxes
+    for (let pass = 0; pass < 120; pass++) {
+      let moved = false;
+      for (let i = 0; i < ns.length; i++) {
+        for (let j = i + 1; j < ns.length; j++) {
+          const a = ns[i], b = ns[j];
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const ox = (a.w / 2 + b.w / 2 + mx) - Math.abs(dx);
+          const oy = (a.h / 2 + b.h / 2 + my) - Math.abs(dy);
+          if (ox > 0 && oy > 0) {
+            if (ox < oy) {
+              const push = (ox / 2) * (dx < 0 ? -1 : 1);
+              a.x -= push; b.x += push;
+            } else {
+              const push = (oy / 2) * (dy < 0 ? -1 : 1);
+              a.y -= push; b.y += push;
+            }
+            moved = true;
+          }
+        }
+      }
+      if (!moved) break;
     }
   }
 
