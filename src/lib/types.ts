@@ -88,6 +88,12 @@ export type Nav =
 
 export type NavigateFn = (nav: Nav) => void;
 
+export interface ProgressEvent {
+  done: number;
+  total: number;
+  label: string;
+}
+
 export interface DatabaseProfile {
   fileName: string;
   fileSize: number;

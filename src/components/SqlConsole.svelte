@@ -1,9 +1,8 @@
 <script lang="ts">
-  import type { Database } from 'sql.js';
-  import { queryAll } from '../lib/db';
+  import type { DbClient } from '../lib/client';
   import DataTable from './DataTable.svelte';
 
-  export let db: Database;
+  export let client: DbClient;
 
   let sql = 'SELECT name FROM sqlite_master WHERE type = \'table\';';
   let columns: string[] = [];
@@ -11,19 +10,23 @@
   let error = '';
   let elapsed = 0;
   let ran = false;
+  let running = false;
 
-  function run() {
+  async function run() {
     error = '';
     ran = true;
+    running = true;
     const t0 = performance.now();
     try {
-      rows = queryAll(db, sql);
+      rows = await client.query(sql);
       columns = rows.length ? Object.keys(rows[0]) : [];
       elapsed = performance.now() - t0;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       rows = [];
       columns = [];
+    } finally {
+      running = false;
     }
   }
 
@@ -40,7 +43,7 @@
     <textarea bind:value={sql} on:keydown={onKey} spellcheck="false" rows="4"></textarea>
     <div class="bar">
       <span class="hint">⌘/Ctrl + Enter to run</span>
-      <button class="primary" on:click={run}>Run query</button>
+      <button class="primary" on:click={run} disabled={running}>{running ? 'Running…' : 'Run query'}</button>
     </div>
   </div>
 

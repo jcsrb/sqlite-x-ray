@@ -409,13 +409,21 @@ function profileTable(
   return { name, type: meta.type, sql: meta.sql, rowCount, columns, foreignKeys, indexes, sampleRows };
 }
 
+export type ProgressFn = (done: number, total: number, label: string) => void;
+
 export function profileDatabase(
   db: Database,
   fileName: string,
   fileSize: number,
+  onProgress?: ProgressFn,
 ): DatabaseProfile {
   const entries = listTables(db);
-  const profiles = entries.map((e) => profileTable(db, e));
+  const profiles: TableProfile[] = [];
+  entries.forEach((e, i) => {
+    onProgress?.(i, entries.length, e.name);
+    profiles.push(profileTable(db, e));
+  });
+  onProgress?.(entries.length, entries.length, 'done');
   const tables = profiles.filter((p) => p.type === 'table');
   const views = profiles.filter((p) => p.type === 'view');
 

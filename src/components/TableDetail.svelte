@@ -1,12 +1,12 @@
 <script lang="ts">
-  import type { Database } from 'sql.js';
+  import type { DbClient } from '../lib/client';
   import type { TableProfile } from '../lib/types';
   import { formatNumber } from '../lib/format';
   import ColumnProfile from './ColumnProfile.svelte';
   import DataTable from './DataTable.svelte';
 
   export let table: TableProfile;
-  export let db: Database;
+  export let client: DbClient;
 
   type Tab = 'profile' | 'data' | 'schema';
   let tab: Tab = 'profile';
@@ -37,7 +37,7 @@
   {#if tab === 'profile'}
     <div class="cols-grid">
       {#each table.columns as col}
-        <ColumnProfile {col} {db} table={table.name} rowCount={table.rowCount} />
+        <ColumnProfile {col} {client} table={table.name} rowCount={table.rowCount} />
       {/each}
     </div>
   {:else if tab === 'data'}

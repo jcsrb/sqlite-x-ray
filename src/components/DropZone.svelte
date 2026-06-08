@@ -1,8 +1,11 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
 
+  import type { ProgressEvent } from '../lib/types';
+
   export let loading = false;
   export let error = '';
+  export let progress: ProgressEvent | null = null;
 
   const dispatch = createEventDispatcher<{ file: File }>();
   let dragging = false;
@@ -42,7 +45,12 @@
   {#if loading}
     <div class="spinner"></div>
     <p class="big">X-raying database…</p>
-    <p class="sub">Profiling tables &amp; columns</p>
+    {#if progress && progress.total > 0}
+      <p class="sub">Profiling {progress.label} ({progress.done}/{progress.total})</p>
+      <div class="progress"><div class="pfill" style="width: {(progress.done / progress.total) * 100}%"></div></div>
+    {:else}
+      <p class="sub">Reading file &amp; loading engine…</p>
+    {/if}
   {:else}
     <div class="icon">🗄️</div>
     <p class="big">Drop a SQLite database</p>
@@ -82,4 +90,6 @@
     animation: spin 0.8s linear infinite; margin-bottom: 12px;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .progress { width: 220px; height: 6px; background: var(--bg); border-radius: 4px; overflow: hidden; margin-top: 10px; }
+  .pfill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--purple)); transition: width 0.2s ease; }
 </style>

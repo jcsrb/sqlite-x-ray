@@ -1,9 +1,8 @@
 <script lang="ts">
   import { setContext } from 'svelte';
-  import type { Database } from 'sql.js';
-  import { openDatabase, readDatabaseFile } from './lib/db';
-  import { profileDatabase } from './lib/profile';
-  import type { DatabaseProfile, InspectFn, Nav, NavigateFn, ColumnProfile } from './lib/types';
+  import { readDatabaseFile } from './lib/db';
+  import { DbClient } from './lib/client';
+  import type { DatabaseProfile, InspectFn, Nav, NavigateFn, ColumnProfile, ProgressEvent } from './lib/types';
   import { formatNumber } from './lib/format';
 
   import DropZone from './components/DropZone.svelte';
@@ -26,33 +25,35 @@
   };
   setContext<NavigateFn>('navigate', navigate);
 
-  let db: Database | null = null;
+  let client: DbClient | null = null;
   let profile: DatabaseProfile | null = null;
   let loading = false;
   let error = '';
+  let progress: ProgressEvent | null = null;
 
   async function loadFile(file: File) {
     loading = true;
     error = '';
+    progress = null;
     try {
       const buf = await readDatabaseFile(file);
-      const database = await openDatabase(buf);
-      // Let the spinner paint before the (synchronous) profiling pass.
-      await new Promise((r) => setTimeout(r, 20));
-      profile = profileDatabase(database, file.name, file.size);
-      db = database;
+      const c = new DbClient();
+      profile = await c.open(buf, file.name, file.size, (p) => (progress = p));
+      client?.close();
+      client = c;
       nav = { view: 'overview' };
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       console.error(e);
     } finally {
       loading = false;
+      progress = null;
     }
   }
 
   function reset() {
-    db?.close();
-    db = null;
+    client?.close();
+    client = null;
     profile = null;
     error = '';
     nav = { view: 'overview' };
@@ -80,7 +81,7 @@
       <h1>SQLite <span class="x">X-Ray</span></h1>
       <p>Drop in a database and get an instant, automatic breakdown — schema, profiles, distributions &amp; charts. Nothing is uploaded.</p>
     </header>
-    <DropZone {loading} {error} on:file={(e) => loadFile(e.detail)} />
+    <DropZone {loading} {error} {progress} on:file={(e) => loadFile(e.detail)} />
   </div>
 {:else}
   <div class="app">
@@ -121,12 +122,12 @@
     <main class="content">
       {#if nav.view === 'overview'}
         <Overview {profile} />
-      {:else if nav.view === 'sql' && db}
-        <SqlConsole {db} />
-      {:else if nav.view === 'column' && currentTable && currentColumn && db}
-        <ColumnView {db} table={currentTable} col={currentColumn} />
-      {:else if currentTable && db}
-        <TableDetail table={currentTable} {db} />
+      {:else if nav.view === 'sql' && client}
+        <SqlConsole {client} />
+      {:else if nav.view === 'column' && currentTable && currentColumn && client}
+        <ColumnView {client} table={currentTable} col={currentColumn} />
+      {:else if currentTable && client}
+        <TableDetail table={currentTable} {client} />
       {/if}
     </main>
   </div>

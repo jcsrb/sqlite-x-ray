@@ -1,14 +1,14 @@
 <script lang="ts">
   import { getContext } from 'svelte';
-  import type { Database } from 'sql.js';
+  import type { DbClient } from '../lib/client';
   import type { ColumnProfile, TableProfile, InspectFn, NavigateFn, TopValue } from '../lib/types';
-  import { queryAll, queryScalar, ident } from '../lib/db';
+  import { ident } from '../lib/db';
   import { formatCell, formatNumber, formatCompact, percent, isUrl } from '../lib/format';
   import BarChart from './BarChart.svelte';
   import Histogram from './Histogram.svelte';
   import NullBar from './NullBar.svelte';
 
-  export let db: Database;
+  export let client: DbClient;
   export let table: TableProfile;
   export let col: ColumnProfile;
 
@@ -18,24 +18,30 @@
   const MATCH_LIMIT = 100;
   const BIG_TOP = 30;
 
-  // Re-query a richer set of top values for the enlarged bar chart.
-  $: bigTop =
-    col.chart === 'bar' || (col.topValues && col.topValues.length)
-      ? (queryAll(
-          db,
-          `SELECT ${ident(col.name)} AS value, COUNT(*) AS count
-           FROM ${ident(table.name)}
-           WHERE ${ident(col.name)} IS NOT NULL
-           GROUP BY ${ident(col.name)}
-           ORDER BY count DESC, value ASC
-           LIMIT ${BIG_TOP}`,
-        ).map((r) => ({ value: r.value, count: Number(r.count) })) as TopValue[])
-      : [];
+  // Re-query a richer set of top values for the enlarged bar chart whenever the
+  // column changes. Async because queries run in the worker.
+  let bigTop: TopValue[] = [];
+  $: void loadBigTop(table.name, col.name);
+  async function loadBigTop(tableName: string, colName: string) {
+    if (!(col.chart === 'bar' || (col.topValues && col.topValues.length))) {
+      bigTop = [];
+      return;
+    }
+    const rows = await client.query(
+      `SELECT ${ident(colName)} AS value, COUNT(*) AS count
+       FROM ${ident(tableName)}
+       WHERE ${ident(colName)} IS NOT NULL
+       GROUP BY ${ident(colName)}
+       ORDER BY count DESC, value ASC
+       LIMIT ${BIG_TOP}`,
+    );
+    bigTop = rows.map((r) => ({ value: r.value, count: Number(r.count) }));
+  }
 
-  function viewRows(value: unknown) {
+  async function viewRows(value: unknown) {
     const where = `WHERE ${ident(col.name)} = $v`;
-    const rows = queryAll(db, `SELECT * FROM ${ident(table.name)} ${where} LIMIT ${MATCH_LIMIT}`, { $v: value as never });
-    const total = queryScalar<number>(db, `SELECT COUNT(*) FROM ${ident(table.name)} ${where}`, { $v: value as never });
+    const rows = await client.query(`SELECT * FROM ${ident(table.name)} ${where} LIMIT ${MATCH_LIMIT}`, { $v: value as never });
+    const total = await client.scalar<number>(`SELECT COUNT(*) FROM ${ident(table.name)} ${where}`, { $v: value as never });
     inspect({ title: `${col.name} = ${formatCell(value)}`, rows, total });
   }
 

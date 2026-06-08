@@ -1,15 +1,15 @@
 <script lang="ts">
   import { getContext } from 'svelte';
-  import type { Database } from 'sql.js';
+  import type { DbClient } from '../lib/client';
   import type { ColumnProfile, InspectFn, NavigateFn } from '../lib/types';
   import { formatCompact, formatCell, isUrl } from '../lib/format';
-  import { queryAll, queryScalar, ident } from '../lib/db';
+  import { ident } from '../lib/db';
   import BarChart from './BarChart.svelte';
   import Histogram from './Histogram.svelte';
   import NullBar from './NullBar.svelte';
 
   export let col: ColumnProfile;
-  export let db: Database;
+  export let client: DbClient;
   export let table: string;
   export let rowCount = 0;
 
@@ -22,15 +22,13 @@
   const MATCH_LIMIT = 100;
 
   /** Show the full rows where this column equals the clicked value. */
-  function viewRows(value: unknown) {
+  async function viewRows(value: unknown) {
     const where = `WHERE ${ident(col.name)} = $v`;
-    const rows = queryAll(
-      db,
+    const rows = await client.query(
       `SELECT * FROM ${ident(table)} ${where} LIMIT ${MATCH_LIMIT}`,
       { $v: value as never },
     );
-    const total = queryScalar<number>(
-      db,
+    const total = await client.scalar<number>(
       `SELECT COUNT(*) FROM ${ident(table)} ${where}`,
       { $v: value as never },
     );
