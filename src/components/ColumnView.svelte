@@ -3,6 +3,7 @@
   import type { DbClient } from '../lib/client';
   import type { ColumnProfile, TableProfile, InspectFn, NavigateFn, TopValue } from '../lib/types';
   import { ident } from '../lib/db';
+  import { buildSelect } from '../lib/sql';
   import { formatCell, formatNumber, formatCompact, percent, isUrl } from '../lib/format';
   import BarChart from './BarChart.svelte';
   import Histogram from './Histogram.svelte';
@@ -42,7 +43,7 @@
     const where = `WHERE ${ident(col.name)} = $v`;
     const rows = await client.query(`SELECT * FROM ${ident(table.name)} ${where} LIMIT ${MATCH_LIMIT}`, { $v: value as never });
     const total = await client.scalar<number>(`SELECT COUNT(*) FROM ${ident(table.name)} ${where}`, { $v: value as never });
-    inspect({ title: `${col.name} = ${formatCell(value)}`, rows, total });
+    inspect({ title: `${col.name} = ${formatCell(value)}`, rows, total, table: table.name, sql: buildSelect(table.name, col.name, value) });
   }
 
   const kindColor: Record<string, string> = {

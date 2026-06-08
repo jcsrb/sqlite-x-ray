@@ -15,7 +15,9 @@
   import CommandPalette from './components/CommandPalette.svelte';
 
   // Row-inspector overlay, provided to descendants via context.
-  let inspectData: { title: string; rows: Record<string, unknown>[]; total?: number } | null = null;
+  let inspectData:
+    | { title: string; rows: Record<string, unknown>[]; total?: number; table?: string; sql?: string }
+    | null = null;
   const inspect: InspectFn = (data) => (inspectData = data);
   setContext<InspectFn>('inspect', inspect);
 
@@ -26,6 +28,17 @@
     inspectData = null;
   };
   setContext<NavigateFn>('navigate', navigate);
+
+  // Drilling: any value click can push a query to the console and run it.
+  let pendingSql = '';
+  let sqlNonce = 0;
+  const runSql = (sql: string) => {
+    pendingSql = sql;
+    sqlNonce++;
+    inspectData = null;
+    nav = { view: 'sql' };
+  };
+  setContext<(sql: string) => void>('runSql', runSql);
 
   let client: DbClient | null = null;
   let profile: DatabaseProfile | null = null;
@@ -176,22 +189,30 @@
     <main class="content">
       {#if nav.view === 'overview'}
         <Overview {profile} />
-      {:else if nav.view === 'sql' && client}
-        <SqlConsole {client} />
       {:else if nav.view === 'column' && currentTable && currentColumn && client}
         <ColumnView {client} table={currentTable} col={currentColumn} />
-      {:else if currentTable && client}
+      {:else if nav.view === 'table' && currentTable && client}
         <TableDetail table={currentTable} {client} />
+      {/if}
+      <!-- Kept mounted so drilled queries and editor state persist across navigation. -->
+      {#if client}
+        <div class:hidden={nav.view !== 'sql'}>
+          <SqlConsole {client} {pendingSql} {sqlNonce} />
+        </div>
       {/if}
     </main>
   </div>
 {/if}
 
-{#if inspectData}
+{#if inspectData && client}
   <RowModal
     title={inspectData.title}
     rows={inspectData.rows}
     total={inspectData.total}
+    table={inspectData.table}
+    sql={inspectData.sql}
+    {client}
+    on:query={(e) => runSql(e.detail)}
     on:close={() => (inspectData = null)}
   />
 {/if}
@@ -262,6 +283,7 @@
   .trows { font-size: 10px; color: var(--text-faint); }
 
   .content { padding: 28px 32px; max-width: 1200px; width: 100%; }
+  .hidden { display: none; }
 
   @media (max-width: 720px) {
     .app { grid-template-columns: 1fr; }

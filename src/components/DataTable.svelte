@@ -8,6 +8,8 @@
   export let maxColWidth = 240;
   /** label prefix for the inspector title, e.g. table name */
   export let label = 'Row';
+  /** source table name — enables drill-down in the inspector */
+  export let table: string | undefined = undefined;
   /** 1-based index of the first row (for paginated displays) */
   export let startIndex = 1;
   export let sortable = false;
@@ -38,7 +40,7 @@
       {#each rows as row, i}
         <tr
           class="data-row"
-          on:click={() => inspect?.({ title: `${label} #${startIndex + i}`, rows: [row] })}
+          on:click={() => inspect?.({ title: `${label} #${startIndex + i}`, rows: [row], table })}
           title="Click to inspect full row"
         >
           <td class="idx">{startIndex + i}</td>

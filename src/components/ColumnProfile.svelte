@@ -4,6 +4,7 @@
   import type { ColumnProfile, InspectFn, NavigateFn } from '../lib/types';
   import { formatCompact, formatCell, isUrl } from '../lib/format';
   import { ident } from '../lib/db';
+  import { buildSelect } from '../lib/sql';
   import BarChart from './BarChart.svelte';
   import Histogram from './Histogram.svelte';
   import NullBar from './NullBar.svelte';
@@ -32,7 +33,7 @@
       `SELECT COUNT(*) FROM ${ident(table)} ${where}`,
       { $v: value as never },
     );
-    inspect({ title: `${col.name} = ${formatCell(value)}`, rows, total });
+    inspect({ title: `${col.name} = ${formatCell(value)}`, rows, total, table, sql: buildSelect(table, col.name, value) });
   }
 
   const kindColor: Record<string, string> = {

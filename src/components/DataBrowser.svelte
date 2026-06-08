@@ -85,7 +85,7 @@
     </div>
   </div>
 
-  <DataTable {columns} {rows} label={table.name} startIndex={from} sortable {sortCol} {sortDir} on:sort={(e) => onSort(e.detail)} />
+  <DataTable {columns} {rows} label={table.name} table={table.name} startIndex={from} sortable {sortCol} {sortDir} on:sort={(e) => onSort(e.detail)} />
 </div>
 
 <style>

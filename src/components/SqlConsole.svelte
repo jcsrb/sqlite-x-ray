@@ -3,6 +3,10 @@
   import DataTable from './DataTable.svelte';
 
   export let client: DbClient;
+  /** SQL pushed in from a drill-down elsewhere in the app. */
+  export let pendingSql = '';
+  /** bumped each time a new pendingSql should be applied + run */
+  export let sqlNonce = 0;
 
   let sql = 'SELECT name FROM sqlite_master WHERE type = \'table\';';
   let columns: string[] = [];
@@ -11,6 +15,14 @@
   let elapsed = 0;
   let ran = false;
   let running = false;
+
+  // Apply + run any query handed to us by a drill-down.
+  let appliedNonce = 0;
+  $: if (sqlNonce !== appliedNonce && pendingSql) {
+    appliedNonce = sqlNonce;
+    sql = pendingSql;
+    run();
+  }
 
   async function run() {
     error = '';

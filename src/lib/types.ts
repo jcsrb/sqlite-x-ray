@@ -91,7 +91,14 @@ export type InspectFn = (data: {
   rows: Record<string, unknown>[];
   /** total matches when `rows` is a capped subset */
   total?: number;
+  /** source table — enables per-field frequency counts and click-to-drill */
+  table?: string;
+  /** the query that produced these rows, for "open in console" */
+  sql?: string;
 }) => void;
+
+/** Send a SQL statement to the console and run it. */
+export type RunSqlFn = (sql: string) => void;
 
 /** Navigation target within the app. */
 export type Nav =
