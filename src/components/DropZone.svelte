@@ -46,7 +46,7 @@
     <div class="spinner"></div>
     <p class="big">X-raying database…</p>
     {#if progress && progress.total > 0}
-      <p class="sub">Profiling {progress.label} ({progress.done}/{progress.total})</p>
+      <p class="sub">{progress.done}/{progress.total} columns · <span class="mono">{progress.label}</span></p>
       <div class="progress"><div class="pfill" style="width: {(progress.done / progress.total) * 100}%"></div></div>
     {:else}
       <p class="sub">Reading file &amp; loading engine…</p>

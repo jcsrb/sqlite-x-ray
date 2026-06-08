@@ -239,15 +239,26 @@ function profileColumn(
   fkMap: Map<string, ForeignKey>,
 ): ColumnProfile {
   const name = col.name;
-  const q = (sql: string) => queryScalar<number>(db, sql) ?? 0;
   const tq = ident(table);
   const cq = ident(name);
 
-  const nonNull = q(`SELECT COUNT(${cq}) FROM ${tq}`);
-  const distinct = q(`SELECT COUNT(DISTINCT ${cq}) FROM ${tq}`);
+  // One scan computes every scalar aggregate we need (non-null count, distinct
+  // count, distinct storage types among non-nulls, and min/max/avg). Doing these
+  // as separate queries meant ~5 full-table scans per column — brutal on large
+  // tables. typeof() of a NULL is 'null', so the CASE keeps it out of the count.
+  const agg = queryAll(
+    db,
+    `SELECT
+       COUNT(${cq}) AS nn,
+       COUNT(DISTINCT ${cq}) AS dc,
+       COUNT(DISTINCT CASE WHEN ${cq} IS NOT NULL THEN typeof(${cq}) END) AS st,
+       MIN(${cq}) AS mn, MAX(${cq}) AS mx, AVG(${cq}) AS av
+     FROM ${tq}`,
+  )[0] ?? {};
+  const nonNull = Number(agg.nn) || 0;
+  const distinct = Number(agg.dc) || 0;
+  const storageTypes = Number(agg.st) || 0;
   const nullCount = rowCount - nonNull;
-  // Distinct SQLite storage types among non-null values; >1 means dirty/mixed data.
-  const storageTypes = q(`SELECT COUNT(DISTINCT typeof(${cq})) FROM ${tq} WHERE ${cq} IS NOT NULL`);
 
   const samples = queryAll(
     db,
@@ -256,10 +267,10 @@ function profileColumn(
   let kind = refineKind(col.type, samples);
 
   // An integer column is boolean only if it has ≤2 distinct values, all in {0,1}.
-  // (Declared BOOL types are already 'boolean' via affinity.)
+  // (Declared BOOL types are already 'boolean' via affinity.) Uses the min/max
+  // already computed above — no extra scan.
   if (kind === 'integer' && distinct > 0 && distinct <= 2) {
-    const mm = queryAll(db, `SELECT MIN(${cq}) AS mn, MAX(${cq}) AS mx FROM ${tq}`)[0];
-    if (Number(mm?.mn) >= 0 && Number(mm?.mx) <= 1) kind = 'boolean';
+    if (Number(agg.mn) >= 0 && Number(agg.mx) <= 1) kind = 'boolean';
   }
 
   const profile: ColumnProfile = {
@@ -281,32 +292,24 @@ function profileColumn(
   if (nonNull === 0) return profile;
 
   if (isNumericKind(kind)) {
-    const stats = queryAll(
-      db,
-      `SELECT MIN(${cq}) AS mn, MAX(${cq}) AS mx, AVG(${cq}) AS av FROM ${tq}`,
-    )[0];
-    profile.min = stats?.mn as number;
-    profile.max = stats?.mx as number;
-    profile.avg = stats?.av != null ? Number(stats.av) : undefined;
+    profile.min = agg.mn as number;
+    profile.max = agg.mx as number;
+    profile.avg = agg.av != null ? Number(agg.av) : undefined;
 
     // Few distinct numeric values → treat as categorical bars; otherwise histogram.
     if (distinct > 1 && distinct <= 15) {
       profile.topValues = topValues(db, table, name);
       profile.chart = 'bar';
     } else {
-      const hist = buildHistogram(db, table, name, Number(stats?.mn), Number(stats?.mx));
+      const hist = buildHistogram(db, table, name, Number(agg.mn), Number(agg.mx));
       if (hist) {
         profile.histogram = hist;
         profile.chart = 'histogram';
       }
     }
   } else if (kind === 'date' || kind === 'datetime') {
-    const stats = queryAll(
-      db,
-      `SELECT MIN(${cq}) AS mn, MAX(${cq}) AS mx FROM ${tq}`,
-    )[0];
-    profile.min = stats?.mn as string;
-    profile.max = stats?.mx as string;
+    profile.min = agg.mn as string;
+    profile.max = agg.mx as string;
     profile.topValues = topValues(db, table, name);
     // Few distinct dates → categorical bars; otherwise a time histogram.
     if (distinct > 1 && distinct <= CATEGORICAL_MAX_DISTINCT) {
@@ -390,6 +393,7 @@ function topValues(db: Database, table: string, column: string, limit = TOP_VALU
 function profileTable(
   db: Database,
   meta: { name: string; sql: string; type: 'table' | 'view' },
+  onColumn?: (colName: string) => void,
 ): TableProfile {
   const { name } = meta;
   const cols = queryAll(db, `PRAGMA table_info(${ident(name)})`) as unknown as {
@@ -404,7 +408,11 @@ function profileTable(
   const fkMap = new Map(foreignKeys.map((fk) => [fk.from, fk]));
   const indexes = meta.type === 'table' ? getIndexes(db, name) : [];
 
-  const columns = cols.map((c) => profileColumn(db, name, c, rowCount, fkMap));
+  const columns: ColumnProfile[] = [];
+  for (const c of cols) {
+    onColumn?.(c.name);
+    columns.push(profileColumn(db, name, c, rowCount, fkMap));
+  }
 
   const sampleRows = queryAll(
     db,
@@ -423,12 +431,22 @@ export function profileDatabase(
   onProgress?: ProgressFn,
 ): DatabaseProfile {
   const entries = listTables(db);
-  const profiles: TableProfile[] = [];
-  entries.forEach((e, i) => {
-    onProgress?.(i, entries.length, e.name);
-    profiles.push(profileTable(db, e));
-  });
-  onProgress?.(entries.length, entries.length, 'done');
+
+  // Progress is tracked per *column*: one big table (e.g. 685k rows × 15 cols)
+  // does most of the work, so per-table progress would freeze on it. Count all
+  // columns up front (cheap PRAGMAs) for a meaningful total, then tick per column.
+  let total = 0;
+  for (const e of entries) total += queryAll(db, `PRAGMA table_info(${ident(e.name)})`).length;
+
+  let done = 0;
+  const profiles: TableProfile[] = entries.map((e) =>
+    profileTable(db, e, (colName) => {
+      onProgress?.(done, total, `${e.name}.${colName}`);
+      done++;
+    }),
+  );
+
+  onProgress?.(total, total, 'analyzing relationships…');
   const tables = profiles.filter((p) => p.type === 'table');
   const views = profiles.filter((p) => p.type === 'view');
 
