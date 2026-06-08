@@ -5,6 +5,7 @@
   import BarChart from './BarChart.svelte';
   import Histogram from './Histogram.svelte';
   import RelationshipMap from './RelationshipMap.svelte';
+  import ERDiagram from './ERDiagram.svelte';
   import Findings from './Findings.svelte';
 
   export let profile: DatabaseProfile;
@@ -105,7 +106,11 @@
     </div>
   </div>
 
-  <RelationshipMap {profile} on:navigate={(e) => goTable(e.detail)} />
+  {#if profile.relationships.length}
+    <ERDiagram {profile} />
+  {:else}
+    <RelationshipMap {profile} on:navigate={(e) => goTable(e.detail)} />
+  {/if}
 </div>
 
 <style>
