@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { setContext } from 'svelte';
+  import { setContext, onMount } from 'svelte';
   import { readDatabaseFile } from './lib/db';
   import { DbClient } from './lib/client';
   import type { DatabaseProfile, InspectFn, Nav, NavigateFn, ColumnProfile, ProgressEvent } from './lib/types';
@@ -11,6 +11,7 @@
   import ColumnView from './components/ColumnView.svelte';
   import SqlConsole from './components/SqlConsole.svelte';
   import RowModal from './components/RowModal.svelte';
+  import CommandPalette from './components/CommandPalette.svelte';
 
   // Row-inspector overlay, provided to descendants via context.
   let inspectData: { title: string; rows: Record<string, unknown>[]; total?: number } | null = null;
@@ -30,6 +31,18 @@
   let loading = false;
   let error = '';
   let progress: ProgressEvent | null = null;
+  let paletteOpen = false;
+
+  onMount(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        if (profile) paletteOpen = !paletteOpen;
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
   async function loadFile(file: File) {
     loading = true;
@@ -92,6 +105,11 @@
       </div>
       <div class="file mono" title={profile.fileName}>{profile.fileName}</div>
 
+      <button class="search" on:click={() => (paletteOpen = true)}>
+        <span>🔍 Search</span>
+        <kbd>⌘K</kbd>
+      </button>
+
       <nav>
         <button class="nav" class:active={nav.view === 'overview'} on:click={() => navigate({ view: 'overview' })}>
           <span>📊 Overview</span>
@@ -142,6 +160,14 @@
   />
 {/if}
 
+{#if paletteOpen && profile}
+  <CommandPalette
+    {profile}
+    on:select={(e) => { navigate(e.detail); paletteOpen = false; }}
+    on:close={() => (paletteOpen = false)}
+  />
+{/if}
+
 <style>
   .landing {
     max-width: 680px; margin: 0 auto; padding: 12vh 24px 24px;
@@ -165,6 +191,14 @@
     font-size: 11px; color: var(--text-faint); padding: 6px 8px;
     background: var(--bg); border-radius: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+
+  .search {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    background: var(--bg-elev2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 7px 12px; color: var(--text-dim); width: 100%;
+  }
+  .search:hover { border-color: var(--accent); color: var(--text); }
+  .search kbd { font-family: var(--mono); font-size: 10px; color: var(--text-faint); background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
 
   nav { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
   .group-label {

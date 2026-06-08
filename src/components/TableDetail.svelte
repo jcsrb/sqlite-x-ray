@@ -3,7 +3,7 @@
   import type { TableProfile } from '../lib/types';
   import { formatNumber } from '../lib/format';
   import ColumnProfile from './ColumnProfile.svelte';
-  import DataTable from './DataTable.svelte';
+  import DataBrowser from './DataBrowser.svelte';
 
   export let table: TableProfile;
   export let client: DbClient;
@@ -11,7 +11,6 @@
   type Tab = 'profile' | 'data' | 'schema';
   let tab: Tab = 'profile';
 
-  $: columnNames = table.columns.map((c) => c.name);
 </script>
 
 <div class="detail">
@@ -41,8 +40,7 @@
       {/each}
     </div>
   {:else if tab === 'data'}
-    <p class="note">Showing first {table.sampleRows.length} of {formatNumber(table.rowCount)} rows</p>
-    <DataTable columns={columnNames} rows={table.sampleRows} label={table.name} />
+    <DataBrowser {client} {table} />
   {:else}
     <div class="schema">
       {#if table.foreignKeys.length}
@@ -97,7 +95,6 @@
     display: grid; gap: 12px;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   }
-  .note { color: var(--text-faint); font-size: 12px; margin: 0; }
 
   .schema { display: flex; flex-direction: column; gap: 18px; }
   .block h4 { color: var(--text-dim); margin-bottom: 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
