@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.local
+.DS_Store
+
+# Never commit databases dropped in here (they may be real/private data)
+*.db
+*.db3
+*.sqlite
+*.sqlite3
+*.gz
