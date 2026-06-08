@@ -3,7 +3,8 @@
   import { readDatabaseFile } from './lib/db';
   import { DbClient } from './lib/client';
   import { download, profileToJson, profileToMarkdown } from './lib/export';
-  import type { DatabaseProfile, InspectFn, Nav, NavigateFn, ColumnProfile, ProgressEvent } from './lib/types';
+  import { buildSelect, buildCount } from './lib/sql';
+  import type { DatabaseProfile, InspectFn, Nav, NavigateFn, ColumnProfile, ProgressEvent, ForeignKey } from './lib/types';
   import { formatNumber } from './lib/format';
 
   import DropZone from './components/DropZone.svelte';
@@ -21,12 +22,44 @@
   const inspect: InspectFn = (data) => (inspectData = data);
   setContext<InspectFn>('inspect', inspect);
 
-  // Navigation, also provided via context so any descendant can deep-link.
+  // Foreign keys of the table the inspector is currently showing — enables
+  // click-to-follow drill-through to parent rows (and recursively onward).
+  $: inspectFks =
+    inspectData?.table && profile
+      ? profile.tables.find((t) => t.name === inspectData?.table)?.foreignKeys ?? []
+      : ([] as ForeignKey[]);
+
+  async function followFk(refTable: string, refCol: string, value: unknown) {
+    if (!client) return;
+    const rows = await client.query(buildSelect(refTable, refCol, value, 100));
+    const total = await client.scalar<number>(buildCount(refTable, refCol, value));
+    inspect({
+      title: `${refTable}.${refCol} = ${value}`,
+      rows,
+      total,
+      table: refTable,
+      sql: buildSelect(refTable, refCol, value, 100),
+    });
+  }
+
+  // Navigation, integrated with browser history so Back/Forward work.
   let nav: Nav = { view: 'overview' };
-  const navigate: NavigateFn = (n) => {
+  let depth = 0; // our push depth within this DB session
+  $: canGoBack = depth > 0;
+
+  function go(n: Nav, replace = false) {
     nav = n;
     inspectData = null;
-  };
+    const state = { xray: n };
+    if (replace) {
+      history.replaceState(state, '');
+    } else {
+      history.pushState(state, '');
+      depth++;
+    }
+  }
+
+  const navigate: NavigateFn = (n) => go(n);
   setContext<NavigateFn>('navigate', navigate);
 
   // Drilling: any value click can push a query to the console and run it.
@@ -35,8 +68,7 @@
   const runSql = (sql: string) => {
     pendingSql = sql;
     sqlNonce++;
-    inspectData = null;
-    nav = { view: 'sql' };
+    go({ view: 'sql' });
   };
   setContext<(sql: string) => void>('runSql', runSql);
 
@@ -54,8 +86,20 @@
         if (profile) paletteOpen = !paletteOpen;
       }
     };
+    const onPop = (e: PopStateEvent) => {
+      inspectData = null;
+      const restored = (e.state as { xray?: Nav } | null)?.xray;
+      if (restored && profile) {
+        nav = restored;
+        depth = Math.max(0, depth - 1);
+      }
+    };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('popstate', onPop);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('popstate', onPop);
+    };
   });
 
   async function loadFile(file: File) {
@@ -72,7 +116,8 @@
       profile = await c.open(buf, name, size, (p) => (progress = p));
       client?.close();
       client = c;
-      nav = { view: 'overview' };
+      depth = 0;
+      go({ view: 'overview' }, true);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       console.error(e);
@@ -108,6 +153,7 @@
     profile = null;
     error = '';
     nav = { view: 'overview' };
+    depth = 0;
   }
 
   $: activeTable = nav.view === 'table' || nav.view === 'column' ? nav.table : null;
@@ -187,6 +233,9 @@
     </aside>
 
     <main class="content">
+      {#if canGoBack}
+        <button class="back" on:click={() => history.back()} title="Back">← Back</button>
+      {/if}
       {#if nav.view === 'overview'}
         <Overview {profile} />
       {:else if nav.view === 'column' && currentTable && currentColumn && client}
@@ -216,8 +265,10 @@
     total={inspectData.total}
     table={inspectData.table}
     sql={inspectData.sql}
+    fks={inspectFks}
     {client}
     on:query={(e) => runSql(e.detail)}
+    on:follow={(e) => followFk(e.detail.refTable, e.detail.refCol, e.detail.value)}
     on:close={() => (inspectData = null)}
   />
 {/if}
@@ -289,6 +340,11 @@
 
   .content { padding: 28px 32px; max-width: 1200px; width: 100%; }
   .hidden { display: none; }
+  .back {
+    margin-bottom: 14px; padding: 5px 12px; font-size: 12px; color: var(--text-dim);
+    background: var(--bg-elev2); border: 1px solid var(--border); border-radius: 7px;
+  }
+  .back:hover { border-color: var(--accent); color: var(--text); }
 
   @media (max-width: 720px) {
     .app { grid-template-columns: 1fr; }
