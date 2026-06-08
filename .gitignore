@@ -9,3 +9,5 @@ dist/
 *.sqlite
 *.sqlite3
 *.gz
+# ...except the bundled synthetic demo, which ships with the app
+!public/demo.sqlite

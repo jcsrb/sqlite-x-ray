@@ -2,6 +2,7 @@
   import { setContext, onMount } from 'svelte';
   import { readDatabaseFile } from './lib/db';
   import { DbClient } from './lib/client';
+  import { download, profileToJson, profileToMarkdown } from './lib/export';
   import type { DatabaseProfile, InspectFn, Nav, NavigateFn, ColumnProfile, ProgressEvent } from './lib/types';
   import { formatNumber } from './lib/format';
 
@@ -45,13 +46,17 @@
   });
 
   async function loadFile(file: File) {
+    const buf = await readDatabaseFile(file);
+    await loadBytes(buf, file.name, buf.length);
+  }
+
+  async function loadBytes(buf: Uint8Array, name: string, size: number) {
     loading = true;
     error = '';
     progress = null;
     try {
-      const buf = await readDatabaseFile(file);
       const c = new DbClient();
-      profile = await c.open(buf, file.name, file.size, (p) => (progress = p));
+      profile = await c.open(buf, name, size, (p) => (progress = p));
       client?.close();
       client = c;
       nav = { view: 'overview' };
@@ -62,6 +67,26 @@
       loading = false;
       progress = null;
     }
+  }
+
+  async function loadSample() {
+    loading = true;
+    error = '';
+    try {
+      const res = await fetch(`${import.meta.env.BASE_URL}demo.sqlite`);
+      const buf = new Uint8Array(await res.arrayBuffer());
+      await loadBytes(buf, 'demo.sqlite', buf.length);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      loading = false;
+    }
+  }
+
+  function exportReport(kind: 'json' | 'md') {
+    if (!profile) return;
+    const base = profile.fileName.replace(/\.[^.]+$/, '') || 'database';
+    if (kind === 'json') download(`${base}-xray.json`, profileToJson(profile), 'application/json');
+    else download(`${base}-xray.md`, profileToMarkdown(profile), 'text/markdown');
   }
 
   function reset() {
@@ -95,6 +120,9 @@
       <p>Drop in a database and get an instant, automatic breakdown — schema, profiles, distributions &amp; charts. Nothing is uploaded.</p>
     </header>
     <DropZone {loading} {error} {progress} on:file={(e) => loadFile(e.detail)} />
+    {#if !loading}
+      <p class="try">No database handy? <button class="link" on:click={loadSample}>Load a sample library database →</button></p>
+    {/if}
   </div>
 {:else}
   <div class="app">
@@ -135,6 +163,14 @@
           {/each}
         {/if}
       </nav>
+
+      <div class="export">
+        <span class="export-label">Export x-ray</span>
+        <div class="export-btns">
+          <button on:click={() => exportReport('md')} title="Download Markdown report">Markdown</button>
+          <button on:click={() => exportReport('json')} title="Download JSON report">JSON</button>
+        </div>
+      </div>
     </aside>
 
     <main class="content">
@@ -177,6 +213,9 @@
   .hero h1 { font-size: 40px; letter-spacing: -0.02em; }
   .hero p { color: var(--text-dim); font-size: 15px; max-width: 480px; margin: 12px auto 0; }
   .x { color: var(--accent); }
+  .try { text-align: center; color: var(--text-faint); font-size: 13px; margin: 0; }
+  .link { background: none; border: none; padding: 0; color: var(--accent); cursor: pointer; font-size: 13px; }
+  .link:hover { text-decoration: underline; }
 
   .app { display: grid; grid-template-columns: 270px 1fr; min-height: 100vh; }
   .sidebar {
@@ -184,6 +223,10 @@
     padding: 16px; display: flex; flex-direction: column; gap: 12px;
     position: sticky; top: 0; height: 100vh; overflow-y: auto;
   }
+  .export { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border-soft); display: flex; flex-direction: column; gap: 6px; }
+  .export-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); }
+  .export-btns { display: flex; gap: 6px; }
+  .export-btns button { flex: 1; padding: 6px 8px; font-size: 12px; }
   .brand { display: flex; align-items: center; justify-content: space-between; }
   .brand h1 { font-size: 18px; }
   .close { padding: 4px 9px; font-size: 12px; }
