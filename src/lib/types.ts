@@ -58,6 +58,20 @@ export interface ColumnProfile {
   chart: 'bar' | 'histogram' | 'none';
   /** 0..1 heuristic of how "interesting" this column is to chart/explore */
   interest: number;
+  /** number of distinct SQLite storage types among non-null values (>1 = dirty) */
+  storageTypes: number;
+}
+
+export type FindingSeverity = 'high' | 'warn' | 'info';
+export type FindingKind = 'orphan-fk' | 'empty' | 'constant' | 'high-null' | 'mixed-type';
+
+export interface Finding {
+  severity: FindingSeverity;
+  kind: FindingKind;
+  table: string;
+  column?: string;
+  message: string;
+  detail?: string;
 }
 
 export interface TableProfile {
@@ -102,4 +116,6 @@ export interface DatabaseProfile {
   totalRows: number;
   /** edges for the relationship graph */
   relationships: { from: string; to: string; columns: string }[];
+  /** data-quality findings surfaced by the x-ray */
+  findings: Finding[];
 }

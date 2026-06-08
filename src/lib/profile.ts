@@ -4,6 +4,7 @@ import type {
   ColumnKind,
   ColumnProfile,
   DatabaseProfile,
+  Finding,
   ForeignKey,
   HistogramBin,
   IndexInfo,
@@ -244,6 +245,8 @@ function profileColumn(
   const nonNull = q(`SELECT COUNT(${cq}) FROM ${tq}`);
   const distinct = q(`SELECT COUNT(DISTINCT ${cq}) FROM ${tq}`);
   const nullCount = rowCount - nonNull;
+  // Distinct SQLite storage types among non-null values; >1 means dirty/mixed data.
+  const storageTypes = q(`SELECT COUNT(DISTINCT typeof(${cq})) FROM ${tq} WHERE ${cq} IS NOT NULL`);
 
   const samples = queryAll(
     db,
@@ -271,6 +274,7 @@ function profileColumn(
     nullFraction: rowCount > 0 ? nullCount / rowCount : 0,
     chart: 'none',
     interest: 0,
+    storageTypes,
   };
 
   if (nonNull === 0) return profile;
@@ -442,5 +446,63 @@ export function profileDatabase(
     views,
     totalRows: tables.reduce((sum, t) => sum + t.rowCount, 0),
     relationships,
+    findings: computeFindings(db, tables),
   };
+}
+
+const HIGH_NULL = 0.6;
+
+/** Data-quality x-ray: referential integrity + per-column smells. */
+function computeFindings(db: Database, tables: TableProfile[]): Finding[] {
+  const findings: Finding[] = [];
+  const tableNames = new Set(tables.map((t) => t.name));
+
+  for (const t of tables) {
+    if (t.rowCount === 0) continue;
+
+    // Orphaned foreign keys — values with no matching parent row.
+    for (const fk of t.foreignKeys) {
+      if (!tableNames.has(fk.table)) {
+        findings.push({
+          severity: 'high', kind: 'orphan-fk', table: t.name, column: fk.from,
+          message: `${t.name}.${fk.from} references missing table ${fk.table}`,
+        });
+        continue;
+      }
+      try {
+        const orphans = queryScalar<number>(
+          db,
+          `SELECT COUNT(*) FROM ${ident(t.name)} c
+           WHERE c.${ident(fk.from)} IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM ${ident(fk.table)} p WHERE p.${ident(fk.to)} = c.${ident(fk.from)})`,
+        ) ?? 0;
+        if (orphans > 0) {
+          findings.push({
+            severity: 'high', kind: 'orphan-fk', table: t.name, column: fk.from,
+            message: `${fmtNum(orphans)} orphaned ${fk.from} value${orphans === 1 ? '' : 's'} in ${t.name}`,
+            detail: `→ ${fk.table}.${fk.to} (no matching parent row)`,
+          });
+        }
+      } catch {
+        /* ignore — odd FK shapes (composite, etc.) */
+      }
+    }
+
+    // Per-column smells.
+    for (const c of t.columns) {
+      if (c.count === 0) {
+        findings.push({ severity: 'warn', kind: 'empty', table: t.name, column: c.name, message: `${t.name}.${c.name} is entirely empty (100% null)` });
+      } else if (c.distinctCount === 1) {
+        findings.push({ severity: 'info', kind: 'constant', table: t.name, column: c.name, message: `${t.name}.${c.name} has a single constant value` });
+      } else if (c.nullFraction >= HIGH_NULL) {
+        findings.push({ severity: 'warn', kind: 'high-null', table: t.name, column: c.name, message: `${t.name}.${c.name} is ${Math.round(c.nullFraction * 100)}% null` });
+      }
+      if (c.storageTypes > 1) {
+        findings.push({ severity: 'warn', kind: 'mixed-type', table: t.name, column: c.name, message: `${t.name}.${c.name} mixes ${c.storageTypes} storage types`, detail: 'values stored as different SQLite types' });
+      }
+    }
+  }
+
+  const rank: Record<string, number> = { high: 0, warn: 1, info: 2 };
+  return findings.sort((a, b) => rank[a.severity] - rank[b.severity]);
 }

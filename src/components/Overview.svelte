@@ -5,6 +5,7 @@
   import BarChart from './BarChart.svelte';
   import Histogram from './Histogram.svelte';
   import RelationshipMap from './RelationshipMap.svelte';
+  import Findings from './Findings.svelte';
 
   export let profile: DatabaseProfile;
 
@@ -53,6 +54,8 @@
     <div class="stat"><span class="num">{profile.relationships.length}</span><span class="lbl">Relationships</span></div>
     <div class="stat"><span class="num">{formatBytes(profile.fileSize)}</span><span class="lbl">File size</span></div>
   </div>
+
+  <Findings findings={profile.findings} />
 
   {#if highlights.length}
     <div class="section">
