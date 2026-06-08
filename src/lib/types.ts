@@ -29,6 +29,8 @@ export interface HistogramBin {
   count: number;
   /** human label for the bucket range */
   label: string;
+  /** for date histograms: the strftime format whose value equals `label` */
+  dateFmt?: string;
 }
 
 export interface TopValue {

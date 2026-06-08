@@ -202,7 +202,7 @@ function buildDateHistogram(
 
   const counts = new Map(rows.map((r) => [String(r.b), Number(r.c)]));
   const keys = enumerateBuckets(String(rows[0].b), String(rows[rows.length - 1].b), grain);
-  return keys.map((k, i) => ({ lo: i, hi: i + 1, count: counts.get(k) ?? 0, label: k }));
+  return keys.map((k, i) => ({ lo: i, hi: i + 1, count: counts.get(k) ?? 0, label: k, dateFmt: fmt }));
 }
 
 /** Ordered, gap-filled bucket keys between two formatted endpoints (capped). */

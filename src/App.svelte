@@ -190,7 +190,12 @@
       {#if nav.view === 'overview'}
         <Overview {profile} />
       {:else if nav.view === 'column' && currentTable && currentColumn && client}
-        <ColumnView {client} table={currentTable} col={currentColumn} />
+        <ColumnView
+          {client}
+          table={currentTable}
+          col={currentColumn}
+          findings={profile.findings.filter((f) => f.table === currentTable?.name && f.column === currentColumn?.name)}
+        />
       {:else if nav.view === 'table' && currentTable && client}
         <TableDetail table={currentTable} {client} />
       {/if}

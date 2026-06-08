@@ -1,22 +1,28 @@
 <script lang="ts">
+  import { createEventDispatcher } from 'svelte';
   import { formatNumber } from '../lib/format';
   import type { HistogramBin } from '../lib/types';
 
   export let bins: HistogramBin[] = [];
+  export let clickable = false;
 
+  const dispatch = createEventDispatcher<{ select: HistogramBin }>();
   $: max = bins.reduce((m, b) => Math.max(m, b.count), 0) || 1;
 </script>
 
 <div class="hist">
-  <div class="cols">
+  <div class="cols" class:clickable>
     {#each bins as b}
       {@const h = (b.count / max) * 100}
-      <div
-        class="col"
-        title="{b.label}: {formatNumber(b.count)}"
-      >
-        <div class="bar" style="height: {Math.max(h, b.count > 0 ? 2 : 0)}%"></div>
-      </div>
+      {#if clickable}
+        <button class="col" title="{b.label}: {formatNumber(b.count)} — click to view rows" on:click={() => dispatch('select', b)}>
+          <div class="bar" style="height: {Math.max(h, b.count > 0 ? 2 : 0)}%"></div>
+        </button>
+      {:else}
+        <div class="col" title="{b.label}: {formatNumber(b.count)}">
+          <div class="bar" style="height: {Math.max(h, b.count > 0 ? 2 : 0)}%"></div>
+        </div>
+      {/if}
     {/each}
   </div>
   {#if bins.length}
@@ -32,7 +38,8 @@
 <style>
   .hist { display: flex; flex-direction: column; gap: 4px; }
   .cols { display: flex; align-items: flex-end; gap: 2px; height: 90px; }
-  .col { flex: 1; height: 100%; display: flex; align-items: flex-end; }
+  .col { flex: 1; height: 100%; display: flex; align-items: flex-end; background: none; border: none; padding: 0; }
+  .cols.clickable .col { cursor: pointer; }
   .bar {
     width: 100%;
     background: linear-gradient(180deg, var(--accent), #1f6feb);
