@@ -63,3 +63,8 @@ export function numericRange(table: string, col: string, lo: number, hi: number,
 export function dateBucket(table: string, col: string, fmt: string, label: string): string {
   return selectWhere(table, `strftime('${fmt}', ${ident(col)}) = ${sqlLiteral(label)}`);
 }
+
+/** Rows matching every (column, value) pair — e.g. a composite-key lookup. */
+export function whereAll(match: { col: string; value: unknown }[]): string {
+  return match.map((m) => whereEq(m.col, m.value)).join(' AND ');
+}

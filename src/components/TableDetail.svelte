@@ -2,6 +2,7 @@
   import type { DbClient } from '../lib/client';
   import type { TableProfile } from '../lib/types';
   import { formatNumber } from '../lib/format';
+  import { fkTarget, keyCols, uniqueKeys } from '../lib/fk';
   import ColumnProfile from './ColumnProfile.svelte';
   import DataBrowser from './DataBrowser.svelte';
 
@@ -10,6 +11,8 @@
 
   type Tab = 'profile' | 'data' | 'schema';
   let tab: Tab = 'profile';
+
+  $: keys = uniqueKeys(table.foreignKeys);
 
 </script>
 
@@ -22,7 +25,7 @@
     <div class="stats">
       <span><strong>{formatNumber(table.rowCount)}</strong> rows</span>
       <span><strong>{table.columns.length}</strong> cols</span>
-      {#if table.foreignKeys.length}<span><strong>{table.foreignKeys.length}</strong> FK</span>{/if}
+      {#if keys.length}<span><strong>{keys.length}</strong> FK</span>{/if}
       {#if table.indexes.length}<span><strong>{table.indexes.length}</strong> idx</span>{/if}
     </div>
   </div>
@@ -56,11 +59,11 @@
     <DataBrowser {client} {table} />
   {:else}
     <div class="schema">
-      {#if table.foreignKeys.length}
+      {#if keys.length}
         <div class="block">
           <h4>Foreign keys</h4>
-          {#each table.foreignKeys as fk}
-            <div class="fk-row mono">{fk.from} → <span class="ref">{fk.table}.{fk.to}</span></div>
+          {#each keys as fk}
+            <div class="fk-row mono">{keyCols(fk.pairs.map((p) => p.from))} → <span class="ref">{fkTarget(fk)}</span></div>
           {/each}
         </div>
       {/if}

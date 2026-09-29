@@ -1,6 +1,7 @@
 import type { Database } from 'sql.js';
 import { queryAll, queryScalar, ident } from './db';
 import { percent } from './format';
+import { keyCols, uniqueKeys } from './fk';
 import type {
   ColumnKind,
   ColumnProfile,
@@ -108,6 +109,18 @@ function listTables(db: Database): TableMeta[] {
   return entries.filter((e) => !shadows.has(e.name));
 }
 
+type ColumnMeta = { name: string; type: string; pk: number; notnull: number; hidden: number };
+
+/**
+ * Columns as `SELECT *` sees them. `table_info` omits generated columns, so use
+ * `table_xinfo` and drop only the hidden columns of virtual tables (hidden = 1);
+ * 2 and 3 are VIRTUAL and STORED generated columns.
+ */
+function visibleColumns(db: Database, table: string): ColumnMeta[] {
+  return (queryAll(db, `PRAGMA table_xinfo(${ident(table)})`) as unknown as ColumnMeta[])
+    .filter((c) => Number(c.hidden) !== 1);
+}
+
 /** Primary-key columns of a table, in key order. */
 function primaryKey(db: Database, table: string): string[] {
   return queryAll(db, `PRAGMA table_info(${ident(table)})`)
@@ -116,24 +129,40 @@ function primaryKey(db: Database, table: string): string[] {
     .map((c) => String(c.name));
 }
 
+/**
+ * One entry per referencing column (so each column can carry its `fk`), but
+ * every entry of a composite key shares an `id` and lists all of the key's
+ * column pairs — integrity checks and drill-through must use the whole key.
+ */
 function getForeignKeys(db: Database, table: string): ForeignKey[] {
   const rows = queryAll(db, `PRAGMA foreign_key_list(${ident(table)})`);
   const pkCache = new Map<string, string[]>();
-  return rows.map((r) => {
+  const parentPk = (parent: string) => {
+    if (!pkCache.has(parent)) {
+      let pk: string[] = [];
+      try { pk = primaryKey(db, parent); } catch { /* missing parent table */ }
+      pkCache.set(parent, pk);
+    }
+    return pkCache.get(parent)!;
+  };
+
+  const byId = new Map<number, { table: string; pairs: { from: string; to: string }[] }>();
+  for (const r of rows) {
+    const id = Number(r.id);
     const parent = String(r.table);
-    let to = r.to;
+    const seq = Number(r.seq) || 0;
     // `REFERENCES parent` with no column list targets the parent's primary key;
     // the pragma reports that as a NULL `to`.
-    if (to == null) {
-      if (!pkCache.has(parent)) {
-        let pk: string[] = [];
-        try { pk = primaryKey(db, parent); } catch { /* missing parent table */ }
-        pkCache.set(parent, pk);
-      }
-      to = pkCache.get(parent)![Number(r.seq) || 0] ?? 'rowid';
-    }
-    return { from: String(r.from), table: parent, to: String(to) };
-  });
+    const to = r.to ?? parentPk(parent)[seq] ?? 'rowid';
+    if (!byId.has(id)) byId.set(id, { table: parent, pairs: [] });
+    byId.get(id)!.pairs[seq] = { from: String(r.from), to: String(to) };
+  }
+
+  const out: ForeignKey[] = [];
+  for (const [id, { table: parent, pairs }] of byId) {
+    for (const p of pairs) out.push({ id, from: p.from, table: parent, to: p.to, pairs });
+  }
+  return out;
 }
 
 function getIndexes(db: Database, table: string): IndexInfo[] {
@@ -267,7 +296,7 @@ function enumerateBuckets(first: string, last: string, grain: DateGrain): string
 function profileColumn(
   db: Database,
   table: string,
-  col: { name: string; type: string; pk: number; notnull: number },
+  col: ColumnMeta,
   rowCount: number,
   fkMap: Map<string, ForeignKey>,
 ): ColumnProfile {
@@ -312,6 +341,7 @@ function profileColumn(
     kind,
     pk: col.pk > 0,
     notNull: col.notnull === 1,
+    generated: Number(col.hidden) >= 2 || undefined,
     fk: fkMap.get(name),
     count: nonNull,
     nullCount,
@@ -429,12 +459,7 @@ function profileTable(
   onColumn?: (colName: string) => void,
 ): TableProfile {
   const { name } = meta;
-  const cols = queryAll(db, `PRAGMA table_info(${ident(name)})`) as unknown as {
-    name: string;
-    type: string;
-    pk: number;
-    notnull: number;
-  }[];
+  const cols = visibleColumns(db, name);
 
   const rowCount = queryScalar<number>(db, `SELECT COUNT(*) FROM ${ident(name)}`) ?? 0;
   const foreignKeys = meta.type === 'table' ? getForeignKeys(db, name) : [];
@@ -476,7 +501,7 @@ export function profileDatabase(
   let total = 0;
   for (const e of entries) {
     try {
-      total += queryAll(db, `PRAGMA table_info(${ident(e.name)})`).length;
+      total += visibleColumns(db, e.name).length;
     } catch (err) {
       errors.set(e.name, err instanceof Error ? err.message : String(err));
     }
@@ -503,10 +528,10 @@ export function profileDatabase(
   const views = profiles.filter((p) => p.type === 'view');
 
   const relationships = tables.flatMap((t) =>
-    t.foreignKeys.map((fk) => ({
+    uniqueKeys(t.foreignKeys).map((fk) => ({
       from: t.name,
       to: fk.table,
-      columns: `${fk.from} → ${fk.to}`,
+      columns: `${keyCols(fk.pairs.map((p) => p.from))} → ${keyCols(fk.pairs.map((p) => p.to))}`,
     })),
   );
 
@@ -549,30 +574,34 @@ function computeFindings(db: Database, tables: TableProfile[], views: TableProfi
     if (t.rowCount === 0) continue;
 
     // Orphaned foreign keys — values with no matching parent row.
-    for (const fk of t.foreignKeys) {
+    for (const fk of uniqueKeys(t.foreignKeys)) {
+      const from = keyCols(fk.pairs.map((p) => p.from));
       if (!tableNames.has(fk.table)) {
         findings.push({
           severity: 'high', kind: 'orphan-fk', table: t.name, column: fk.from,
-          message: `${t.name}.${fk.from} references missing table ${fk.table}`,
+          message: `${t.name}.${from} references missing table ${fk.table}`,
         });
         continue;
       }
       try {
+        // A key with any NULL column isn't enforced (MATCH SIMPLE), so skip it.
+        const notNull = fk.pairs.map((p) => `c.${ident(p.from)} IS NOT NULL`).join(' AND ');
+        const matches = fk.pairs.map((p) => `p.${ident(p.to)} = c.${ident(p.from)}`).join(' AND ');
         const orphans = queryScalar<number>(
           db,
           `SELECT COUNT(*) FROM ${ident(t.name)} c
-           WHERE c.${ident(fk.from)} IS NOT NULL
-             AND NOT EXISTS (SELECT 1 FROM ${ident(fk.table)} p WHERE p.${ident(fk.to)} = c.${ident(fk.from)})`,
+           WHERE ${notNull}
+             AND NOT EXISTS (SELECT 1 FROM ${ident(fk.table)} p WHERE ${matches})`,
         ) ?? 0;
         if (orphans > 0) {
           findings.push({
             severity: 'high', kind: 'orphan-fk', table: t.name, column: fk.from,
-            message: `${fmtNum(orphans)} orphaned ${fk.from} value${orphans === 1 ? '' : 's'} in ${t.name}`,
-            detail: `→ ${fk.table}.${fk.to} (no matching parent row)`,
+            message: `${fmtNum(orphans)} orphaned ${from} value${orphans === 1 ? '' : 's'} in ${t.name}`,
+            detail: `→ ${fk.table}.${keyCols(fk.pairs.map((p) => p.to))} (no matching parent row)`,
           });
         }
       } catch {
-        /* ignore — odd FK shapes (composite, etc.) */
+        /* ignore — e.g. a key referencing a column the parent doesn't have */
       }
     }
 
