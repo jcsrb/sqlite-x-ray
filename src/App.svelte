@@ -3,7 +3,8 @@
   import { readDatabaseFile } from './lib/db';
   import { DbClient } from './lib/client';
   import { download, profileToJson, profileToMarkdown } from './lib/export';
-  import { buildSelect, buildCount } from './lib/sql';
+  import { selectWhere, whereAll } from './lib/sql';
+  import { ident } from './lib/db';
   import type { DatabaseProfile, InspectFn, Nav, NavigateFn, ColumnProfile, ProgressEvent, ForeignKey } from './lib/types';
   import { formatNumber } from './lib/format';
 
@@ -29,17 +30,23 @@
       ? profile.tables.find((t) => t.name === inspectData?.table)?.foreignKeys ?? []
       : ([] as ForeignKey[]);
 
-  async function followFk(refTable: string, refCol: string, value: unknown) {
+  async function followFk(refTable: string, match: { col: string; value: unknown }[]) {
     if (!client) return;
-    const rows = await client.query(buildSelect(refTable, refCol, value, 100));
-    const total = await client.scalar<number>(buildCount(refTable, refCol, value));
-    inspect({
-      title: `${refTable}.${refCol} = ${value}`,
-      rows,
-      total,
-      table: refTable,
-      sql: buildSelect(refTable, refCol, value, 100),
-    });
+    const where = whereAll(match);
+    const sql = selectWhere(refTable, where, 100);
+    try {
+      const rows = await client.query(sql);
+      const total = await client.scalar<number>(`SELECT COUNT(*) FROM ${ident(refTable)} WHERE ${where}`);
+      inspect({
+        title: `${refTable}.${match.map((m) => `${m.col} = ${m.value}`).join(', ')}`,
+        rows,
+        total,
+        table: refTable,
+        sql,
+      });
+    } catch {
+      /* database closed mid-follow */
+    }
   }
 
   // Navigation, integrated with browser history so Back/Forward work.
@@ -293,7 +300,7 @@
     fks={inspectFks}
     {client}
     on:query={(e) => runSql(e.detail)}
-    on:follow={(e) => followFk(e.detail.refTable, e.detail.refCol, e.detail.value)}
+    on:follow={(e) => followFk(e.detail.refTable, e.detail.match)}
     on:close={() => (inspectData = null)}
   />
 {/if}

@@ -79,9 +79,49 @@ describe('profileDatabase', () => {
       INSERT INTO child VALUES (1, 1), (2, 99);
     `));
     const child = p.tables.find((t) => t.name === 'child')!;
-    expect(child.foreignKeys).toEqual([{ from: 'pid', table: 'parent', to: 'pk' }]);
+    expect(child.foreignKeys).toEqual([
+      { id: 0, from: 'pid', table: 'parent', to: 'pk', pairs: [{ from: 'pid', to: 'pk' }] },
+    ]);
     const orphan = p.findings.find((f) => f.kind === 'orphan-fk');
     expect(orphan?.message).toMatch(/^1 orphaned pid value in child/);
+  });
+
+  it('checks composite foreign keys as one key', () => {
+    const p = profile(db(`
+      CREATE TABLE parent (a INTEGER, b INTEGER, PRIMARY KEY (a, b));
+      CREATE TABLE child (id INTEGER, x INTEGER, y INTEGER, FOREIGN KEY (x, y) REFERENCES parent (a, b));
+      INSERT INTO parent VALUES (1, 1), (2, 2);
+      -- (1,2) has no parent even though x=1 and y=2 each exist on their own;
+      -- (NULL, 5) is skipped because a composite key with a NULL isn't enforced.
+      INSERT INTO child VALUES (1, 1, 1), (2, 2, 2), (3, 1, 2), (4, NULL, 5);
+    `));
+    const child = p.tables.find((t) => t.name === 'child')!;
+    expect(child.foreignKeys).toHaveLength(2);
+    expect(child.foreignKeys[0].pairs).toEqual([{ from: 'x', to: 'a' }, { from: 'y', to: 'b' }]);
+    expect(p.relationships).toEqual([{ from: 'child', to: 'parent', columns: '(x, y) → (a, b)' }]);
+    const orphans = p.findings.filter((f) => f.kind === 'orphan-fk');
+    expect(orphans).toHaveLength(1);
+    expect(orphans[0].message).toMatch(/^1 orphaned \(x, y\) value in child/);
+  });
+
+  it('resolves an implicit composite primary key reference', () => {
+    const p = profile(db(`
+      CREATE TABLE parent (a INTEGER, b INTEGER, PRIMARY KEY (b, a));
+      CREATE TABLE child (x INTEGER, y INTEGER, FOREIGN KEY (x, y) REFERENCES parent);
+    `));
+    const fk = p.tables.find((t) => t.name === 'child')!.foreignKeys[0];
+    expect(fk.pairs).toEqual([{ from: 'x', to: 'b' }, { from: 'y', to: 'a' }]);
+  });
+
+  it('profiles generated columns', () => {
+    const p = profile(db(`
+      CREATE TABLE g (a INTEGER, b INTEGER GENERATED ALWAYS AS (a * 2) VIRTUAL, c TEXT AS (a || 'x') STORED);
+      INSERT INTO g (a) VALUES (1), (2), (3);
+    `));
+    const cols = p.tables[0].columns;
+    expect(cols.map((c) => c.name)).toEqual(['a', 'b', 'c']);
+    expect(cols.map((c) => !!c.generated)).toEqual([false, true, true]);
+    expect(cols[1].max).toBe(6);
   });
 
   it('handles empty tables', () => {
