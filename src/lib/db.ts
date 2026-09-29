@@ -40,8 +40,12 @@ async function gunzip(bytes: Uint8Array<ArrayBuffer>): Promise<Uint8Array> {
     },
   });
   const stream = source.pipeThrough(new DecompressionStream('gzip'));
-  const buf = await new Response(stream).arrayBuffer();
-  return new Uint8Array(buf);
+  try {
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  } catch {
+    // The stream error surfaces as an opaque "Failed to fetch" TypeError.
+    throw new Error("Couldn't decompress this gzip file — it may be corrupt or truncated.");
+  }
 }
 
 /** Run a query and return rows as plain objects. */

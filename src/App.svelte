@@ -43,20 +43,22 @@
   }
 
   // Navigation, integrated with browser history so Back/Forward work.
+  // Each history entry records which DB session it belongs to and its depth in
+  // it, so Back/Forward restore the right depth and never resurrect a view from
+  // a previously loaded database.
+  type HistState = { xray: Nav; session: number; depth: number };
   let nav: Nav = { view: 'overview' };
+  let session = 0;
   let depth = 0; // our push depth within this DB session
   $: canGoBack = depth > 0;
 
   function go(n: Nav, replace = false) {
     nav = n;
     inspectData = null;
-    const state = { xray: n };
-    if (replace) {
-      history.replaceState(state, '');
-    } else {
-      history.pushState(state, '');
-      depth++;
-    }
+    if (!replace) depth++;
+    const state: HistState = { xray: n, session, depth };
+    if (replace) history.replaceState(state, '');
+    else history.pushState(state, '');
   }
 
   const navigate: NavigateFn = (n) => go(n);
@@ -88,10 +90,15 @@
     };
     const onPop = (e: PopStateEvent) => {
       inspectData = null;
-      const restored = (e.state as { xray?: Nav } | null)?.xray;
-      if (restored && profile) {
-        nav = restored;
-        depth = Math.max(0, depth - 1);
+      if (!profile) return;
+      const st = e.state as Partial<HistState> | null;
+      if (st?.xray && st.session === session) {
+        nav = st.xray;
+        depth = st.depth ?? 0;
+      } else {
+        // An entry from before this database was opened.
+        nav = { view: 'overview' };
+        depth = 0;
       }
     };
     window.addEventListener('keydown', onKey);
@@ -102,43 +109,59 @@
     };
   });
 
-  async function loadFile(file: File) {
-    const buf = await readDatabaseFile(file);
-    await loadBytes(buf, file.name, buf.length);
-  }
+  // Every load gets a sequence number; a newer load supersedes an older one
+  // still in flight (its worker is terminated and its result ignored).
+  let loadSeq = 0;
+  let openingClient: DbClient | null = null;
 
-  async function loadBytes(buf: Uint8Array, name: string, size: number) {
+  async function load(read: () => Promise<{ buf: Uint8Array; name: string }>) {
+    const seq = ++loadSeq;
+    openingClient?.close();
+    openingClient = null;
     loading = true;
     error = '';
     progress = null;
+    let c: DbClient | null = null;
     try {
-      const c = new DbClient();
-      profile = await c.open(buf, name, size, (p) => (progress = p));
+      const { buf, name } = await read();
+      if (seq !== loadSeq) return;
+      c = openingClient = new DbClient();
+      const p = await c.open(buf, name, buf.length, (pr) => {
+        if (seq === loadSeq) progress = pr;
+      });
+      if (seq !== loadSeq) return;
+      openingClient = null;
       client?.close();
       client = c;
+      profile = p;
+      pendingSql = '';
+      sqlNonce = 0;
+      session++;
       depth = 0;
       go({ view: 'overview' }, true);
     } catch (e) {
+      if (seq !== loadSeq) return;
+      c?.close();
+      openingClient = null;
       error = e instanceof Error ? e.message : String(e);
       console.error(e);
     } finally {
-      loading = false;
-      progress = null;
+      if (seq === loadSeq) {
+        loading = false;
+        progress = null;
+      }
     }
   }
 
-  async function loadSample() {
-    loading = true;
-    error = '';
-    try {
+  const loadFile = (file: File) =>
+    load(async () => ({ buf: await readDatabaseFile(file), name: file.name }));
+
+  const loadSample = () =>
+    load(async () => {
       const res = await fetch(`${import.meta.env.BASE_URL}demo.sqlite`);
-      const buf = new Uint8Array(await res.arrayBuffer());
-      await loadBytes(buf, 'demo.sqlite', buf.length);
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-      loading = false;
-    }
-  }
+      if (!res.ok) throw new Error(`Couldn't fetch the sample database (HTTP ${res.status}).`);
+      return { buf: new Uint8Array(await res.arrayBuffer()), name: 'demo.sqlite' };
+    });
 
   function exportReport(kind: 'json' | 'md') {
     if (!profile) return;
@@ -152,6 +175,8 @@
     client = null;
     profile = null;
     error = '';
+    pendingSql = '';
+    sqlNonce = 0;
     nav = { view: 'overview' };
     depth = 0;
   }
