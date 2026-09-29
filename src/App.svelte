@@ -160,6 +160,15 @@
     }
   }
 
+  /** Abandon the load in progress (profiling can't be interrupted, so its worker is terminated). */
+  function cancelLoad() {
+    ++loadSeq;
+    openingClient?.close();
+    openingClient = null;
+    loading = false;
+    progress = null;
+  }
+
   const loadFile = (file: File) =>
     load(async () => ({ buf: await readDatabaseFile(file), name: file.name }));
 
@@ -210,7 +219,7 @@
       <h1>SQLite <span class="x">X-Ray</span></h1>
       <p>Drop in a database and get an instant, automatic breakdown — schema, profiles, distributions &amp; charts. Nothing is uploaded.</p>
     </header>
-    <DropZone {loading} {error} {progress} on:file={(e) => loadFile(e.detail)} />
+    <DropZone {loading} {error} {progress} on:file={(e) => loadFile(e.detail)} on:cancel={cancelLoad} />
     {#if !loading}
       <p class="try">No database handy? <button class="link" on:click={loadSample}>Load a sample library database →</button></p>
     {/if}

@@ -7,7 +7,7 @@
   export let error = '';
   export let progress: ProgressEvent | null = null;
 
-  const dispatch = createEventDispatcher<{ file: File }>();
+  const dispatch = createEventDispatcher<{ file: File; cancel: void }>();
   let dragging = false;
   let input: HTMLInputElement;
 
@@ -22,27 +22,8 @@
   }
 </script>
 
-<div
-  class="drop"
-  class:dragging
-  class:loading
-  role="button"
-  tabindex="0"
-  on:click={() => input.click()}
-  on:keydown={(e) => (e.key === 'Enter' || e.key === ' ') && input.click()}
-  on:dragover|preventDefault={() => (dragging = true)}
-  on:dragleave={() => (dragging = false)}
-  on:drop={onDrop}
->
-  <input
-    bind:this={input}
-    type="file"
-    accept=".sqlite,.sqlite3,.db,.db3,.gz,.sqlite.gz,.db.gz,application/x-sqlite3,application/vnd.sqlite3,application/gzip"
-    on:change={(e) => handleFiles(e.currentTarget.files)}
-    hidden
-  />
-
-  {#if loading}
+{#if loading}
+  <div class="drop loading" role="status">
     <div class="spinner"></div>
     <p class="big">X-raying database…</p>
     {#if progress && progress.total > 0}
@@ -51,15 +32,34 @@
     {:else}
       <p class="sub">Reading file &amp; loading engine…</p>
     {/if}
-  {:else}
+    <button class="cancel" on:click={() => dispatch('cancel')}>Cancel</button>
+  </div>
+{:else}
+  <div
+    class="drop"
+    class:dragging
+    role="button"
+    tabindex="0"
+    on:click={() => input.click()}
+    on:keydown={(e) => (e.key === 'Enter' || e.key === ' ') && input.click()}
+    on:dragover|preventDefault={() => (dragging = true)}
+    on:dragleave={() => (dragging = false)}
+    on:drop={onDrop}
+  >
+    <input
+      bind:this={input}
+      type="file"
+      accept=".sqlite,.sqlite3,.db,.db3,.gz,.sqlite.gz,.db.gz,application/x-sqlite3,application/vnd.sqlite3,application/gzip"
+      on:change={(e) => handleFiles(e.currentTarget.files)}
+      hidden
+    />
     <div class="icon">🗄️</div>
     <p class="big">Drop a SQLite database</p>
     <p class="sub">or click to browse · <code>.sqlite</code> <code>.db</code> <code>.sqlite3</code> <code>.gz</code></p>
     <p class="privacy">🔒 100% in-browser — your file never leaves this device</p>
-  {/if}
-
-  {#if error}<div class="error mono">{error}</div>{/if}
-</div>
+    {#if error}<div class="error mono">{error}</div>{/if}
+  </div>
+{/if}
 
 <style>
   .drop {
@@ -92,4 +92,5 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   .progress { width: 220px; height: 6px; background: var(--bg); border-radius: 4px; overflow: hidden; margin-top: 10px; }
   .pfill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--purple)); transition: width 0.2s ease; }
+  .cancel { margin-top: 14px; }
 </style>

@@ -43,6 +43,14 @@
       <pre>{table.sql}</pre>
     </div>
   {:else}
+  {#if table.sample}
+    <div class="sampled">
+      Large table: column profiles below come from a random sample of
+      <strong>{formatNumber(table.sample.rows)}</strong> of {formatNumber(table.rowCount)} rows.
+      Row counts, nulls, min/max/avg and data-quality findings are exact; distinct counts,
+      top values and charts are estimates (≈). The Data tab and every query use the full table.
+    </div>
+  {/if}
   <div class="tabs">
     <button class:active={tab === 'profile'} on:click={() => (tab = 'profile')}>Columns</button>
     <button class:active={tab === 'data'} on:click={() => (tab = 'data')}>Data</button>
@@ -113,6 +121,11 @@
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   }
 
+  .sampled {
+    font-size: 12px; color: var(--text-dim); background: var(--bg-elev2);
+    border: 1px dashed var(--border); border-radius: var(--radius); padding: 10px 14px; line-height: 1.5;
+  }
+  .sampled strong { color: var(--text); font-family: var(--mono); }
   .unreadable {
     display: flex; flex-direction: column; gap: 6px; font-size: 13px;
     background: #d2992222; border: 1px solid #d2992255; color: var(--text);

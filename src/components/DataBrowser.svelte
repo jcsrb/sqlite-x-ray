@@ -54,6 +54,13 @@
 
   // Reload whenever the query inputs change.
   $: void load(table.name, page, sortCol, sortDir, debounced);
+  // A stable row key for tables that have one (not views or WITHOUT ROWID
+  // tables), under whichever rowid alias no real column shadows.
+  $: rowKey =
+    table.type === 'table' && !/\bWITHOUT\s+ROWID\b/i.test(table.sql)
+      ? ['rowid', '_rowid_', 'oid'].find((a) => !columns.some((c) => c.toLowerCase() === a)) ?? null
+      : null;
+
   // Responses can arrive out of order (a slow filtered count, then a fast page),
   // so only the latest load may write its results.
   let loadSeq = 0;
@@ -62,16 +69,33 @@
     loading = true;
     try {
       const { clause, params } = buildWhere();
-      const order = sc ? `ORDER BY ${ident(sc)} ${sd === 'asc' ? 'ASC' : 'DESC'}` : '';
       let n = clause ? filteredCounts.get(q) : table.rowCount;
       if (n === undefined) {
         n = (await client.scalar<number>(`SELECT COUNT(*) FROM ${ident(tableName)} ${clause}`, params)) ?? 0;
         filteredCounts.set(q, n);
       }
-      const page = await client.query(
-        `SELECT * FROM ${ident(tableName)} ${clause} ${order} LIMIT ${PAGE} OFFSET ${p * PAGE}`,
+
+      // OFFSET makes SQLite produce and discard every row before the page — for a
+      // sorted or filtered page near the end of a big table, nearly all of them.
+      // Pages in the back half are read from the other end instead (order
+      // reversed, small offset, rows flipped back). The row key breaks ties so
+      // both directions are exact mirrors.
+      const asc = sd === 'asc';
+      const orderBy = (forward: boolean) => {
+        const parts: string[] = [];
+        if (sc) parts.push(`${ident(sc)} ${asc === forward ? 'ASC' : 'DESC'}`);
+        if (rowKey) parts.push(`${rowKey} ${forward ? 'ASC' : 'DESC'}`);
+        return parts.length ? `ORDER BY ${parts.join(', ')}` : '';
+      };
+      const fromEnd = n - (p + 1) * PAGE;
+      const reverse = rowKey !== null && fromEnd < p * PAGE;
+      const limit = reverse ? PAGE + Math.min(0, fromEnd) : PAGE;
+      const offset = reverse ? Math.max(0, fromEnd) : p * PAGE;
+      const got = await client.query(
+        `SELECT * FROM ${ident(tableName)} ${clause} ${orderBy(!reverse)} LIMIT ${limit} OFFSET ${offset}`,
         params,
       );
+      const page = reverse ? got.reverse() : got;
       if (seq !== loadSeq) return;
       total = n;
       rows = page;

@@ -19,7 +19,7 @@
   const navigate = getContext<NavigateFn>('navigate');
 
   /** Every non-null value is unique (IDs, etc.) — worth flagging in the UI. */
-  $: allDistinct = col.count > 0 && col.distinctCount === col.count;
+  $: allDistinct = col.count > 0 && col.distinctCount === col.count && !col.approx;
 
   const MATCH_LIMIT = 100;
 
@@ -64,7 +64,7 @@
   <div class="meta">
     <span title="declared type">{col.declaredType}</span>
     <span class="sep">·</span>
-    <span title="distinct values">{formatCompact(col.distinctCount)} distinct</span>
+    <span title={col.approx ? 'distinct values (estimated from a sample)' : 'distinct values'}>{col.approx ? '≈' : ''}{formatCompact(col.distinctCount)} distinct</span>
     {#if col.min !== undefined && col.max !== undefined}
       <span class="sep">·</span>
       <span title="range">{formatCell(col.min)} → {formatCell(col.max)}</span>

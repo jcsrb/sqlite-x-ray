@@ -115,7 +115,7 @@
       if (empty) out.push({ label: "empty ''", value: formatNumber(empty) });
     }
 
-    if (n > 0) out.push({ label: 'uniqueness', value: percent(col.distinctCount / n) });
+    if (n > 0) out.push({ label: 'uniqueness', value: (col.approx ? '≈' : '') + percent(col.distinctCount / n) });
     return out;
   }
 
@@ -182,13 +182,20 @@
         </button>
       {/if}
       {#if col.generated}<span class="pill gen" title="GENERATED ALWAYS AS (…)">generated</span>{/if}
-      {#if col.count > 0 && col.distinctCount === col.count && !col.pk}<span class="pill uniq">unique</span>{/if}
+      {#if col.count > 0 && col.distinctCount === col.count && !col.pk && !col.approx}<span class="pill uniq">unique</span>{/if}
     </div>
   </div>
 
+  {#if col.approx && table.sample}
+    <div class="sampled">
+      Distinct count and charts are estimated from a random sample of {formatNumber(table.sample.rows)} of
+      {formatNumber(table.rowCount)} rows. Counts, nulls and range are exact, as are the stats below and anything you query.
+    </div>
+  {/if}
+
   <div class="stats">
     <div class="stat"><span class="n">{formatNumber(col.count)}</span><span class="l">non-null</span></div>
-    <div class="stat"><span class="n">{formatCompact(col.distinctCount)}</span><span class="l">distinct</span></div>
+    <div class="stat"><span class="n">{col.approx ? '≈' : ''}{formatCompact(col.distinctCount)}</span><span class="l">distinct</span></div>
     <div class="stat"><span class="n" class:warn={col.nullFraction > 0.5}>{percent(col.nullFraction)}</span><span class="l">null</span></div>
     {#if col.min !== undefined}<div class="stat"><span class="n sm mono">{formatCell(col.min)}</span><span class="l">min</span></div>{/if}
     {#if col.max !== undefined}<div class="stat"><span class="n sm mono">{formatCell(col.max)}</span><span class="l">max</span></div>{/if}
@@ -279,4 +286,8 @@
   .muted { color: var(--text-faint); font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 12px; }
   .big-hist { height: 160px; display: flex; flex-direction: column; justify-content: flex-end; }
   .big-hist :global(.cols) { height: 140px; }
+  .sampled {
+    font-size: 12px; color: var(--text-dim); background: var(--bg-elev2);
+    border: 1px dashed var(--border); border-radius: var(--radius); padding: 8px 12px;
+  }
 </style>

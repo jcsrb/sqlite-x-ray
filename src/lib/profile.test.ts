@@ -146,6 +146,73 @@ describe('profileDatabase', () => {
     expect(tag.topValues?.[0]).toEqual({ value: 'dup', count: 2 });
   });
 
+  it('profiles views from a snapshot and leaves no temp tables behind', () => {
+    const d = db(`
+      CREATE TABLE t (k TEXT, n INTEGER);
+      INSERT INTO t VALUES ('a', 1), ('a', 2), ('b', 3), ('c', NULL);
+      CREATE VIEW v AS SELECT k, n * 10 AS n10 FROM t;
+    `);
+    const p = profile(d);
+    const v = p.views[0];
+    expect(v.rowCount).toBe(4);
+    expect(v.sample).toBeUndefined();
+    expect(v.columns[0].topValues?.[0]).toEqual({ value: 'a', count: 2 });
+    expect(v.columns[1]).toMatchObject({ count: 3, nullCount: 1, min: 10, max: 30 });
+    expect(d.exec(`SELECT name FROM sqlite_temp_master`)).toEqual([]);
+  });
+
+  describe('large tables', () => {
+    // 10k rows with a sampling threshold of 1k: profiled from a ~2k-row sample.
+    const big = () => {
+      const d = db(`
+        CREATE TABLE big (id INTEGER PRIMARY KEY, cat TEXT, val REAL, rare INTEGER, same TEXT, u TEXT);
+        WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10000)
+        INSERT INTO big SELECT i, 'c' || (i % 4), i / 10.0,
+          CASE WHEN i = 7777 THEN 42 END, 'x', 'u' || i FROM n;
+      `);
+      return profileDatabase(d, 'big.db', 0, undefined, { sampleAbove: 1000, sampleSize: 2000 });
+    };
+
+    it('samples, but keeps exact row, null, range and type figures', () => {
+      const t = big().tables[0];
+      expect(t.rowCount).toBe(10000);
+      expect(t.sample!.rows).toBeGreaterThan(1500);
+      expect(t.sample!.rows).toBeLessThan(2500);
+      const col = (n: string) => t.columns.find((c) => c.name === n)!;
+      expect(col('val')).toMatchObject({ count: 10000, nullCount: 0, min: 0.1, max: 1000, approx: true });
+      expect(col('val').avg).toBeCloseTo(500.05, 5);
+      // A single non-null value in 10k rows is almost never in the sample, but
+      // the column must not be reported as empty.
+      expect(col('rare')).toMatchObject({ count: 1, nullCount: 9999, distinctCount: 1 });
+      expect(col('same').distinctCount).toBe(1);
+      expect(col('id').distinctCount).toBe(10000);
+    });
+
+    it('scales sampled estimates to the full table', () => {
+      const t = big().tables[0];
+      const cat = t.columns.find((c) => c.name === 'cat')!;
+      expect(cat.distinctCount).toBe(4);
+      const total = cat.topValues!.reduce((s, v) => s + v.count, 0);
+      expect(total).toBeGreaterThan(9900);
+      expect(total).toBeLessThan(10100);
+      const u = t.columns.find((c) => c.name === 'u')!;
+      expect(u.distinctCount).toBeGreaterThan(9000);
+      expect(u.distinctCount).toBeLessThanOrEqual(10000);
+      const hist = t.columns.find((c) => c.name === 'val')!.histogram!;
+      const histTotal = hist.reduce((s, b) => s + b.count, 0);
+      expect(Math.abs(histTotal - 10000)).toBeLessThan(100);
+    });
+
+    it('keeps findings exact on sampled tables', () => {
+      const p = big();
+      const about = (col: string) => p.findings.filter((f) => f.column === col).map((f) => f.kind);
+      // One value in 10k rows: constant (as unsampled), never "entirely empty".
+      expect(about('rare')).toEqual(['constant']);
+      expect(about('same')).toEqual(['constant']);
+      expect(about('cat')).toEqual([]);
+    });
+  });
+
   it('handles empty tables', () => {
     const p = profile(db(`CREATE TABLE e (a INTEGER, b TEXT);`));
     expect(p.tables[0].rowCount).toBe(0);
