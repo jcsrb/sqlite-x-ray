@@ -27,6 +27,19 @@
     </div>
   </div>
 
+  {#if table.error !== undefined}
+    <div class="unreadable">
+      <strong>This {table.type} can't be read in the browser.</strong>
+      <span class="mono">{table.error}</span>
+      {#if /^\s*CREATE\s+VIRTUAL/i.test(table.sql)}
+        <span>It's a virtual table whose module isn't built into sql.js — the rest of the database is unaffected.</span>
+      {/if}
+    </div>
+    <div class="block">
+      <h4>DDL</h4>
+      <pre>{table.sql}</pre>
+    </div>
+  {:else}
   <div class="tabs">
     <button class:active={tab === 'profile'} on:click={() => (tab = 'profile')}>Columns</button>
     <button class:active={tab === 'data'} on:click={() => (tab = 'data')}>Data</button>
@@ -68,6 +81,7 @@
       </div>
     </div>
   {/if}
+  {/if}
 </div>
 
 <style>
@@ -95,6 +109,13 @@
     display: grid; gap: 12px;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   }
+
+  .unreadable {
+    display: flex; flex-direction: column; gap: 6px; font-size: 13px;
+    background: #d2992222; border: 1px solid #d2992255; color: var(--text);
+    border-radius: var(--radius); padding: 12px 14px;
+  }
+  .unreadable .mono { color: var(--amber); font-size: 12px; }
 
   .schema { display: flex; flex-direction: column; gap: 18px; }
   .block h4 { color: var(--text-dim); margin-bottom: 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }

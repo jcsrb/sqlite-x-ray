@@ -15,6 +15,19 @@ export class DbClient {
   constructor() {
     this.worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
     this.worker.onmessage = (e: MessageEvent) => this.handle(e.data);
+    // A worker that dies (e.g. out of memory on a huge file) never answers, so
+    // fail everything in flight rather than leaving callers waiting forever.
+    this.worker.onerror = (e: ErrorEvent) => {
+      e.preventDefault();
+      this.failAll(new Error(e.message || 'The database worker crashed (the file may be too large).'));
+    };
+  }
+
+  private failAll(err: Error) {
+    this.openReject?.(err);
+    this.openResolve = this.openReject = null;
+    for (const p of this.pending.values()) p.reject(err);
+    this.pending.clear();
   }
 
   private handle(m: any) {
@@ -71,8 +84,9 @@ export class DbClient {
     return keys.length ? (rows[0][keys[0]] as T) : undefined;
   }
 
+  /** Terminate the worker; anything still in flight rejects. */
   close() {
     this.worker.terminate();
-    this.pending.clear();
+    this.failAll(new Error('Database closed'));
   }
 }

@@ -6,7 +6,7 @@
   const navigate = getContext<NavigateFn>('navigate');
 
   const icon: Record<string, string> = {
-    'orphan-fk': '🔗', empty: '∅', constant: '▬', 'high-null': '◔', 'mixed-type': '⚠',
+    'orphan-fk': '🔗', empty: '∅', constant: '▬', 'high-null': '◔', 'mixed-type': '⚠', unreadable: '⛔',
   };
 
   function open(f: Finding) {

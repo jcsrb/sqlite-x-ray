@@ -80,27 +80,60 @@ function isNumericKind(k: ColumnKind): boolean {
   return k === 'integer' || k === 'real';
 }
 
-function listTables(db: Database): { name: string; sql: string; type: 'table' | 'view' }[] {
+/**
+ * Suffixes of the internal "shadow" tables that FTS3/4/5 and R-Tree virtual
+ * tables keep their data in. They're implementation details — profiling them
+ * as ordinary tables just adds noise.
+ */
+const SHADOW_SUFFIXES = ['content', 'data', 'idx', 'docsize', 'config', 'segments', 'segdir', 'stat', 'node', 'parent', 'rowid'];
+
+type TableMeta = { name: string; sql: string; type: 'table' | 'view' };
+
+function listTables(db: Database): TableMeta[] {
+  // `_` is a LIKE wildcard, so escape it — otherwise user tables such as
+  // `sqlite3_data` would be hidden along with SQLite's internal tables.
   const rows = queryAll(
     db,
     `SELECT name, sql, type FROM sqlite_master
-     WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%'
+     WHERE type IN ('table','view') AND name NOT LIKE 'sqlite!_%' ESCAPE '!'
      ORDER BY type, name`,
   );
-  return rows.map((r) => ({
+  const entries: TableMeta[] = rows.map((r) => ({
     name: String(r.name),
     sql: String(r.sql ?? ''),
     type: r.type === 'view' ? 'view' : 'table',
   }));
+  const virtuals = entries.filter((e) => /^\s*CREATE\s+VIRTUAL\s+TABLE/i.test(e.sql)).map((e) => e.name);
+  const shadows = new Set(virtuals.flatMap((v) => SHADOW_SUFFIXES.map((s) => `${v}_${s}`)));
+  return entries.filter((e) => !shadows.has(e.name));
+}
+
+/** Primary-key columns of a table, in key order. */
+function primaryKey(db: Database, table: string): string[] {
+  return queryAll(db, `PRAGMA table_info(${ident(table)})`)
+    .filter((c) => Number(c.pk) > 0)
+    .sort((a, b) => Number(a.pk) - Number(b.pk))
+    .map((c) => String(c.name));
 }
 
 function getForeignKeys(db: Database, table: string): ForeignKey[] {
   const rows = queryAll(db, `PRAGMA foreign_key_list(${ident(table)})`);
-  return rows.map((r) => ({
-    from: String(r.from),
-    table: String(r.table),
-    to: String(r.to),
-  }));
+  const pkCache = new Map<string, string[]>();
+  return rows.map((r) => {
+    const parent = String(r.table);
+    let to = r.to;
+    // `REFERENCES parent` with no column list targets the parent's primary key;
+    // the pragma reports that as a NULL `to`.
+    if (to == null) {
+      if (!pkCache.has(parent)) {
+        let pk: string[] = [];
+        try { pk = primaryKey(db, parent); } catch { /* missing parent table */ }
+        pkCache.set(parent, pk);
+      }
+      to = pkCache.get(parent)![Number(r.seq) || 0] ?? 'rowid';
+    }
+    return { from: String(r.from), table: parent, to: String(to) };
+  });
 }
 
 function getIndexes(db: Database, table: string): IndexInfo[] {
@@ -392,7 +425,7 @@ function topValues(db: Database, table: string, column: string, limit = TOP_VALU
 
 function profileTable(
   db: Database,
-  meta: { name: string; sql: string; type: 'table' | 'view' },
+  meta: TableMeta,
   onColumn?: (colName: string) => void,
 ): TableProfile {
   const { name } = meta;
@@ -435,16 +468,35 @@ export function profileDatabase(
   // Progress is tracked per *column*: one big table (e.g. 685k rows × 15 cols)
   // does most of the work, so per-table progress would freeze on it. Count all
   // columns up front (cheap PRAGMAs) for a meaningful total, then tick per column.
+  // A table whose schema can't be read (a virtual table whose module isn't in
+  // this sql.js build, e.g. FTS5; a view over a dropped table) must not reject
+  // the whole database — it's recorded as unreadable and everything else is
+  // profiled as normal.
+  const errors = new Map<string, string>();
   let total = 0;
-  for (const e of entries) total += queryAll(db, `PRAGMA table_info(${ident(e.name)})`).length;
+  for (const e of entries) {
+    try {
+      total += queryAll(db, `PRAGMA table_info(${ident(e.name)})`).length;
+    } catch (err) {
+      errors.set(e.name, err instanceof Error ? err.message : String(err));
+    }
+  }
 
   let done = 0;
-  const profiles: TableProfile[] = entries.map((e) =>
-    profileTable(db, e, (colName) => {
-      onProgress?.(done, total, `${e.name}.${colName}`);
-      done++;
-    }),
-  );
+  const profiles: TableProfile[] = entries.map((e) => {
+    const known = errors.get(e.name);
+    if (known !== undefined) return unreadableTable(e, known);
+    const before = done;
+    try {
+      return profileTable(db, e, (colName) => {
+        onProgress?.(done, total, `${e.name}.${colName}`);
+        done++;
+      });
+    } catch (err) {
+      done = before;
+      return unreadableTable(e, err instanceof Error ? err.message : String(err));
+    }
+  });
 
   onProgress?.(total, total, 'analyzing relationships…');
   const tables = profiles.filter((p) => p.type === 'table');
@@ -465,16 +517,33 @@ export function profileDatabase(
     views,
     totalRows: tables.reduce((sum, t) => sum + t.rowCount, 0),
     relationships,
-    findings: computeFindings(db, tables),
+    findings: computeFindings(db, tables, views),
+  };
+}
+
+function unreadableTable(meta: TableMeta, error: string): TableProfile {
+  return {
+    name: meta.name, type: meta.type, sql: meta.sql, rowCount: 0,
+    columns: [], foreignKeys: [], indexes: [], sampleRows: [], error,
   };
 }
 
 const HIGH_NULL = 0.6;
 
 /** Data-quality x-ray: referential integrity + per-column smells. */
-function computeFindings(db: Database, tables: TableProfile[]): Finding[] {
+function computeFindings(db: Database, tables: TableProfile[], views: TableProfile[]): Finding[] {
   const findings: Finding[] = [];
   const tableNames = new Set(tables.map((t) => t.name));
+
+  for (const t of [...tables, ...views]) {
+    if (t.error !== undefined) {
+      findings.push({
+        severity: 'warn', kind: 'unreadable', table: t.name,
+        message: `${t.name} could not be read`,
+        detail: t.error,
+      });
+    }
+  }
 
   for (const t of tables) {
     if (t.rowCount === 0) continue;

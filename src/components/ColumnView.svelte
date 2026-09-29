@@ -31,20 +31,30 @@
 
   $: void load(table.name, col.name, col.kind);
 
+  // This component is reused as you move between columns, so a slow query for
+  // the previous column can resolve after the new one's — each load gets a
+  // token and results from superseded loads are dropped.
+  let loadSeq = 0;
+
   async function load(tableName: string, colName: string, _kind: string) {
+    const seq = ++loadSeq;
+    const current = () => seq === loadSeq;
     extra = [];
     bigTop = [];
-    await Promise.all([loadBigTop(tableName, colName), loadExtra(tableName, colName)]);
+    await Promise.all([
+      loadBigTop(tableName, colName).then((v) => { if (current()) bigTop = v; }, () => {}),
+      loadExtra(tableName, colName).then((v) => { if (current()) extra = v; }, () => {}),
+    ]);
   }
 
-  async function loadBigTop(tableName: string, colName: string) {
-    if (!(col.chart === 'bar' || (col.topValues && col.topValues.length))) return;
+  async function loadBigTop(tableName: string, colName: string): Promise<TopValue[]> {
+    if (!(col.chart === 'bar' || (col.topValues && col.topValues.length))) return [];
     const rows = await client.query(
       `SELECT ${ident(colName)} AS value, COUNT(*) AS count
        FROM ${ident(tableName)} WHERE ${ident(colName)} IS NOT NULL
        GROUP BY ${ident(colName)} ORDER BY count DESC, value ASC LIMIT ${BIG_TOP}`,
     );
-    bigTop = rows.map((r) => ({ value: r.value, count: Number(r.count) }));
+    return rows.map((r) => ({ value: r.value, count: Number(r.count) }));
   }
 
   async function quantile(tableName: string, colName: string, p: number, n: number): Promise<unknown> {
@@ -54,15 +64,22 @@
     );
   }
 
-  async function loadExtra(tableName: string, colName: string) {
+  async function loadExtra(tableName: string, colName: string): Promise<Extra[]> {
     const cq = ident(colName);
     const tq = ident(tableName);
     const n = col.count;
     const out: Extra[] = [];
 
     if (isNumeric && n > 0) {
-      const s = (await client.query(`SELECT SUM(${cq}) sum, AVG(${cq}*${cq}) sq, AVG(${cq}) av FROM ${tq}`))[0];
-      const variance = Number(s?.sq) - Number(s?.av) ** 2;
+      // TOTAL() rather than SUM(): SUM throws "integer overflow" on large ints.
+      // Variance is taken around the known mean — AVG(x²) − AVG(x)² cancels to 0
+      // for large values such as Unix timestamps.
+      const mean = Number(col.avg ?? 0);
+      const s = (await client.query(
+        `SELECT TOTAL(${cq}) sum, AVG((${cq} - :m) * (${cq} - :m)) var FROM ${tq} WHERE ${cq} IS NOT NULL`,
+        { ':m': mean },
+      ))[0];
+      const variance = Number(s?.var);
       const std = variance > 0 ? Math.sqrt(variance) : 0;
       const [p25, p50, p75] = await Promise.all([
         quantile(tableName, colName, 0.25, n),
@@ -95,7 +112,7 @@
     }
 
     if (n > 0) out.push({ label: 'uniqueness', value: percent(col.distinctCount / n) });
-    extra = out;
+    return out;
   }
 
   function fmtN(v: unknown): string {

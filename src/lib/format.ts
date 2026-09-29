@@ -23,7 +23,8 @@ export function formatCell(v: unknown): string {
   if (v === null || v === undefined) return '∅';
   if (v instanceof Uint8Array) return `‹blob ${v.length}B›`;
   if (typeof v === 'string') return v;
-  if (typeof v === 'number') return v.toLocaleString();
+  // Cells show the stored value exactly: locale formatting would round 0.00012
+  // to "0" and turn IDs and years into "2,024".
   return String(v);
 }
 
