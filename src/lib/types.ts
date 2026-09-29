@@ -65,7 +65,7 @@ export interface ColumnProfile {
 }
 
 export type FindingSeverity = 'high' | 'warn' | 'info';
-export type FindingKind = 'orphan-fk' | 'empty' | 'constant' | 'high-null' | 'mixed-type';
+export type FindingKind = 'orphan-fk' | 'empty' | 'constant' | 'high-null' | 'mixed-type' | 'unreadable';
 
 export interface Finding {
   severity: FindingSeverity;
@@ -85,6 +85,8 @@ export interface TableProfile {
   foreignKeys: ForeignKey[];
   indexes: IndexInfo[];
   sampleRows: Record<string, unknown>[];
+  /** set when the table's schema/data couldn't be read (e.g. unsupported virtual table) */
+  error?: string;
 }
 
 /** Open the row-inspector overlay with a set of full rows. */
