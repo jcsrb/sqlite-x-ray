@@ -9,12 +9,16 @@ export type ColumnKind =
   | 'unknown';
 
 export interface ForeignKey {
+  /** key id — shared by every column of a composite key */
+  id: number;
   /** column in this table */
   from: string;
   /** referenced table */
   table: string;
   /** referenced column */
   to: string;
+  /** every column pair of this key, in key order (length > 1 for composite keys) */
+  pairs: { from: string; to: string }[];
 }
 
 export interface IndexInfo {
@@ -44,6 +48,8 @@ export interface ColumnProfile {
   kind: ColumnKind;
   pk: boolean;
   notNull: boolean;
+  /** a GENERATED ALWAYS AS (…) column */
+  generated?: boolean;
   fk?: ForeignKey;
   /** non-null value count */
   count: number;

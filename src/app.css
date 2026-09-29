@@ -81,5 +81,6 @@ button.primary:hover { background: #58a0ff; }
   white-space: nowrap;
 }
 .pill.pk { color: var(--amber); border-color: #d2992255; background: #d299221a; }
+.pill.gen { color: var(--text-dim); border-color: var(--border); background: var(--bg-elev2); }
 .pill.fk { color: var(--purple); border-color: #bc8cff55; background: #bc8cff1a; }
 .pill.kind { color: var(--accent); }

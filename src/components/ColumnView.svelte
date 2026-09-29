@@ -3,6 +3,7 @@
   import type { DbClient } from '../lib/client';
   import type { ColumnProfile, TableProfile, InspectFn, NavigateFn, RunSqlFn, Finding, HistogramBin, TopValue } from '../lib/types';
   import { ident } from '../lib/db';
+  import { fkTarget } from '../lib/fk';
   import { buildSelect, groupByCount, distinctValues, orderByCol, nullRows, numericRange, dateBucket } from '../lib/sql';
   import { formatCell, formatNumber, formatCompact, percent, isUrl } from '../lib/format';
   import BarChart from './BarChart.svelte';
@@ -174,9 +175,10 @@
       {#if col.pk}<span class="pill pk">PK</span>{/if}
       {#if col.fk}
         <button class="pill fk" on:click={() => col.fk && navigate({ view: 'table', table: col.fk.table })} title="go to {col.fk.table}">
-          FK → {col.fk.table}.{col.fk.to}
+          FK → {fkTarget(col.fk)}
         </button>
       {/if}
+      {#if col.generated}<span class="pill gen" title="GENERATED ALWAYS AS (…)">generated</span>{/if}
       {#if col.count > 0 && col.distinctCount === col.count && !col.pk}<span class="pill uniq">unique</span>{/if}
     </div>
   </div>

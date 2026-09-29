@@ -16,11 +16,18 @@
   const dispatch = createEventDispatcher<{
     close: void;
     query: string;
-    follow: { refTable: string; refCol: string; value: unknown };
+    follow: { refTable: string; match: { col: string; value: unknown }[] };
   }>();
   const close = () => dispatch('close');
 
   $: fkByCol = new Map(fks.map((fk) => [fk.from, fk]));
+
+  // A composite key is followed with all of its columns; if any is NULL the
+  // key doesn't reference anything.
+  function followMatch(fk: ForeignKey, row: Record<string, unknown>) {
+    const match = fk.pairs.map((p) => ({ col: p.to, value: row[p.from] }));
+    return match.some((m) => m.value === null || m.value === undefined) ? null : match;
+  }
 
   $: columns = rows.length ? Object.keys(rows[0]) : [];
 
@@ -107,11 +114,14 @@
                 <span class="acts">
                   {#if fkByCol.has(c) && v !== null && v !== undefined}
                     {@const fk = fkByCol.get(c)}
-                    <button
-                      class="fk-follow"
-                      on:click={() => fk && dispatch('follow', { refTable: fk.table, refCol: fk.to, value: v })}
-                      title="open the {fk?.table} row this references"
-                    >→ {fk?.table}</button>
+                    {@const match = fk ? followMatch(fk, row) : null}
+                    {#if fk && match}
+                      <button
+                        class="fk-follow"
+                        on:click={() => dispatch('follow', { refTable: fk.table, match })}
+                        title="open the {fk.table} row this references"
+                      >→ {fk.table}</button>
+                    {/if}
                   {/if}
                   {#if table && drillable(v)}
                     <button class="freq" on:click={() => drill(c, v)} title="rows where {c} = this — click to query">

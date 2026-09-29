@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { fkTarget } from '../lib/fk';
   import { getContext } from 'svelte';
   import type { DbClient } from '../lib/client';
   import type { ColumnProfile, InspectFn, NavigateFn } from '../lib/types';
@@ -53,7 +54,8 @@
     <div class="name-line">
       <button class="name" on:click={() => navigate({ view: 'column', table, column: col.name })} title="Open column view">{col.name}</button>
       {#if col.pk}<span class="pill pk">PK</span>{/if}
-      {#if col.fk}<span class="pill fk" title="→ {col.fk.table}.{col.fk.to}">FK</span>{/if}
+      {#if col.fk}<span class="pill fk" title="→ {fkTarget(col.fk)}">FK</span>{/if}
+      {#if col.generated}<span class="pill gen" title="GENERATED ALWAYS AS (…)">generated</span>{/if}
       {#if allDistinct && !col.pk}<span class="pill uniq" title="every value is distinct">unique</span>{/if}
     </div>
     <span class="kind" style="color: {kindColor[col.kind]}">{col.kind}</span>
