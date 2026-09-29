@@ -124,6 +124,28 @@ describe('profileDatabase', () => {
     expect(cols[1].max).toBe(6);
   });
 
+  it('profiles tables whose names clash with internal query names', () => {
+    const p = profile(db(`CREATE TABLE g (v TEXT, n INTEGER); INSERT INTO g VALUES ('a', 1), ('a', 2), ('b', 3);`));
+    expect(p.tables[0].error).toBeUndefined();
+    expect(p.tables[0].columns[0].topValues).toEqual([{ value: 'a', count: 2 }, { value: 'b', count: 1 }]);
+  });
+
+  it('uses the schema to skip grouping unique columns, but not partial unique ones', () => {
+    const p = profile(db(`
+      CREATE TABLE u (id INTEGER PRIMARY KEY, code TEXT UNIQUE, tag TEXT);
+      CREATE UNIQUE INDEX u_tag ON u (tag) WHERE tag <> 'dup';
+      INSERT INTO u VALUES (3, 'c', 'dup'), (1, 'a', 'dup'), (2, NULL, 'x');
+    `));
+    const [id, code, tag] = p.tables[0].columns;
+    expect(id.distinctCount).toBe(3);
+    expect(id.topValues).toEqual([{ value: 1, count: 1 }, { value: 2, count: 1 }, { value: 3, count: 1 }]);
+    expect(code.count).toBe(2);
+    expect(code.distinctCount).toBe(2);
+    // 'dup' is excluded from the partial unique index, so it can repeat.
+    expect(tag.distinctCount).toBe(2);
+    expect(tag.topValues?.[0]).toEqual({ value: 'dup', count: 2 });
+  });
+
   it('handles empty tables', () => {
     const p = profile(db(`CREATE TABLE e (a INTEGER, b TEXT);`));
     expect(p.tables[0].rowCount).toBe(0);

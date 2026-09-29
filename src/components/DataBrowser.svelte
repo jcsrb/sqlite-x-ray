@@ -25,8 +25,14 @@
   // Reset to first page when table changes.
   $: if (table) resetForTable();
   function resetForTable() {
+    clearTimeout(timer);
     page = 0; sortCol = ''; sortDir = 'asc'; filter = ''; debounced = '';
+    filteredCounts = new Map();
   }
+
+  // The unfiltered total is known from the profile; a filtered total is counted
+  // once per filter string, not again on every page or sort change.
+  let filteredCounts = new Map<string, number>();
 
   function onFilter() {
     clearTimeout(timer);
@@ -41,24 +47,38 @@
 
   function buildWhere(): { clause: string; params: Record<string, unknown> } {
     if (!debounced.trim()) return { clause: '', params: {} };
-    const conds = columns.map((c) => `CAST(${ident(c)} AS TEXT) LIKE $q`).join(' OR ');
-    return { clause: `WHERE ${conds}`, params: { $q: `%${debounced}%` } };
+    // Escape LIKE wildcards so a typed % or _ matches literally.
+    const conds = columns.map((c) => `CAST(${ident(c)} AS TEXT) LIKE $q ESCAPE '!'`).join(' OR ');
+    return { clause: `WHERE ${conds}`, params: { $q: `%${debounced.replace(/[!%_]/g, '!$&')}%` } };
   }
 
   // Reload whenever the query inputs change.
   $: void load(table.name, page, sortCol, sortDir, debounced);
-  async function load(tableName: string, p: number, sc: string, sd: string, _q: string) {
+  // Responses can arrive out of order (a slow filtered count, then a fast page),
+  // so only the latest load may write its results.
+  let loadSeq = 0;
+  async function load(tableName: string, p: number, sc: string, sd: string, q: string) {
+    const seq = ++loadSeq;
     loading = true;
     try {
       const { clause, params } = buildWhere();
       const order = sc ? `ORDER BY ${ident(sc)} ${sd === 'asc' ? 'ASC' : 'DESC'}` : '';
-      total = (await client.scalar<number>(`SELECT COUNT(*) FROM ${ident(tableName)} ${clause}`, params)) ?? 0;
-      rows = await client.query(
+      let n = clause ? filteredCounts.get(q) : table.rowCount;
+      if (n === undefined) {
+        n = (await client.scalar<number>(`SELECT COUNT(*) FROM ${ident(tableName)} ${clause}`, params)) ?? 0;
+        filteredCounts.set(q, n);
+      }
+      const page = await client.query(
         `SELECT * FROM ${ident(tableName)} ${clause} ${order} LIMIT ${PAGE} OFFSET ${p * PAGE}`,
         params,
       );
+      if (seq !== loadSeq) return;
+      total = n;
+      rows = page;
+    } catch {
+      /* database closed while loading */
     } finally {
-      loading = false;
+      if (seq === loadSeq) loading = false;
     }
   }
 

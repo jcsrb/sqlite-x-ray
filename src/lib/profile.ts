@@ -14,7 +14,6 @@ import type {
   TopValue,
 } from './types';
 
-const SAMPLE_ROWS = 50;
 const TOP_VALUES = 12;
 const HISTOGRAM_BINS = 24;
 /** Above this distinct count we don't enumerate top values for categorical display. */
@@ -172,6 +171,7 @@ function getIndexes(db: Database, table: string): IndexInfo[] {
     return {
       name: String(idx.name),
       unique: idx.unique === 1,
+      partial: idx.partial === 1,
       columns: cols.map((c) => String(c.name)),
     };
   });
@@ -227,14 +227,22 @@ function buildDateHistogram(
   db: Database,
   table: string,
   column: string,
+  min: unknown,
+  max: unknown,
 ): HistogramBin[] | undefined {
   const cq = ident(column);
   const tq = ident(table);
-  const span = queryAll(
-    db,
-    `SELECT MIN(julianday(${cq})) AS mn, MAX(julianday(${cq})) AS mx
-     FROM ${tq} WHERE julianday(${cq}) IS NOT NULL`,
-  )[0];
+  // ISO date strings sort chronologically, so the column's min/max usually give
+  // the span without another scan; fall back to scanning if either endpoint
+  // isn't a date SQLite can parse.
+  let span = queryAll(db, `SELECT julianday(?) AS mn, julianday(?) AS mx`, [min, max])[0];
+  if (span?.mn == null || span?.mx == null) {
+    span = queryAll(
+      db,
+      `SELECT MIN(julianday(${cq})) AS mn, MAX(julianday(${cq})) AS mx
+       FROM ${tq} WHERE julianday(${cq}) IS NOT NULL`,
+    )[0];
+  }
   const mn = Number(span?.mn);
   const mx = Number(span?.mx);
   if (!Number.isFinite(mn) || !Number.isFinite(mx) || mx < mn) return undefined;
@@ -299,24 +307,18 @@ function profileColumn(
   col: ColumnMeta,
   rowCount: number,
   fkMap: Map<string, ForeignKey>,
+  unique: boolean,
 ): ColumnProfile {
   const name = col.name;
   const tq = ident(table);
   const cq = ident(name);
 
-  // One scan computes every scalar aggregate we need (non-null count, distinct
-  // count, distinct storage types among non-nulls, and min/max/avg). Doing these
-  // as separate queries meant ~5 full-table scans per column — brutal on large
-  // tables. typeof() of a NULL is 'null', so the CASE keeps it out of the count.
-  const agg = queryAll(
-    db,
-    `SELECT
-       COUNT(${cq}) AS nn,
-       COUNT(DISTINCT ${cq}) AS dc,
-       COUNT(DISTINCT CASE WHEN ${cq} IS NOT NULL THEN typeof(${cq}) END) AS st,
-       MIN(${cq}) AS mn, MAX(${cq}) AS mx, AVG(${cq}) AS av
-     FROM ${tq}`,
-  )[0] ?? {};
+  // One grouped scan yields everything: grouping the non-null values once gives
+  // the distinct count (number of groups), the top values, the non-null count
+  // (sum of group sizes), min/max/avg and the number of storage types. That is
+  // ~2× faster than COUNT(DISTINCT …) followed by a separate GROUP BY for the
+  // top values, since COUNT(DISTINCT) already pays for the grouping.
+  const { agg, top } = unique ? uniqueScan(db, table, name) : groupedScan(db, table, name);
   const nonNull = Number(agg.nn) || 0;
   const distinct = Number(agg.dc) || 0;
   const storageTypes = Number(agg.st) || 0;
@@ -361,7 +363,7 @@ function profileColumn(
 
     // Few distinct numeric values → treat as categorical bars; otherwise histogram.
     if (distinct > 1 && distinct <= 15) {
-      profile.topValues = topValues(db, table, name);
+      profile.topValues = top;
       profile.chart = 'bar';
     } else {
       const hist = buildHistogram(db, table, name, Number(agg.mn), Number(agg.mx));
@@ -373,19 +375,19 @@ function profileColumn(
   } else if (kind === 'date' || kind === 'datetime') {
     profile.min = agg.mn as string;
     profile.max = agg.mx as string;
-    profile.topValues = topValues(db, table, name);
+    profile.topValues = top;
     // Few distinct dates → categorical bars; otherwise a time histogram.
     if (distinct > 1 && distinct <= CATEGORICAL_MAX_DISTINCT) {
       profile.chart = 'bar';
     } else {
-      const hist = buildDateHistogram(db, table, name);
+      const hist = buildDateHistogram(db, table, name, agg.mn, agg.mx);
       if (hist) {
         profile.histogram = hist;
         profile.chart = 'histogram';
       }
     }
   } else if (kind === 'boolean') {
-    profile.topValues = topValues(db, table, name);
+    profile.topValues = top;
     profile.chart = 'bar';
   } else if (kind === 'text') {
     // Essentially-unique text (IDs, titles, URLs): chips + length range, no chart.
@@ -393,7 +395,7 @@ function profileColumn(
     // skewed enough that the most frequent values are worth ranking.
     const nearUnique = distinct >= nonNull * NEAR_UNIQUE_RATIO;
     if (distinct > 1 && !nearUnique) {
-      profile.topValues = topValues(db, table, name);
+      profile.topValues = top;
       profile.chart = 'bar';
     } else {
       const lens = queryAll(
@@ -402,7 +404,7 @@ function profileColumn(
       )[0];
       profile.min = lens?.mn != null ? `len ${lens.mn}` : undefined;
       profile.max = lens?.mx != null ? `len ${lens.mx}` : undefined;
-      profile.topValues = topValues(db, table, name, 6);
+      profile.topValues = top.slice(0, 6);
     }
   }
 
@@ -440,17 +442,50 @@ function interestScore(c: ColumnProfile): number {
   return Math.max(0, Math.min(1, score));
 }
 
-function topValues(db: Database, table: string, column: string, limit = TOP_VALUES): TopValue[] {
+interface GroupedAgg { nn: number; dc: number; st: number; mn: unknown; mx: unknown; av: number | null }
+
+function groupedScan(db: Database, table: string, column: string): { agg: GroupedAgg; top: TopValue[] } {
+  const cq = ident(column);
   const rows = queryAll(
     db,
-    `SELECT ${ident(column)} AS value, COUNT(*) AS count
-     FROM ${ident(table)}
-     WHERE ${ident(column)} IS NOT NULL
-     GROUP BY ${ident(column)}
-     ORDER BY count DESC, value ASC
-     LIMIT ${limit}`,
+    `WITH __xray_groups AS MATERIALIZED (
+       SELECT ${cq} AS v, COUNT(*) AS n FROM ${ident(table)} WHERE ${cq} IS NOT NULL GROUP BY ${cq}
+     )
+     SELECT 's' AS k, (SELECT TOTAL(n) FROM __xray_groups) AS a, (SELECT COUNT(*) FROM __xray_groups) AS b,
+            (SELECT COUNT(DISTINCT typeof(v)) FROM __xray_groups) AS c, (SELECT MIN(v) FROM __xray_groups) AS d,
+            (SELECT MAX(v) FROM __xray_groups) AS e, (SELECT TOTAL(v * n) / TOTAL(n) FROM __xray_groups) AS f
+     UNION ALL
+     SELECT * FROM (SELECT 't', v, n, NULL, NULL, NULL, NULL FROM __xray_groups ORDER BY n DESC, v ASC LIMIT ${TOP_VALUES})`,
   );
-  return rows.map((r) => ({ value: r.value, count: Number(r.count) }));
+  const s = rows.find((r) => r.k === 's') ?? {};
+  const nn = Number(s.a) || 0;
+  return {
+    agg: { nn, dc: Number(s.b) || 0, st: Number(s.c) || 0, mn: s.d, mx: s.e, av: nn > 0 && s.f != null ? Number(s.f) : null },
+    top: rows.filter((r) => r.k === 't').map((r) => ({ value: r.a, count: Number(r.b) })),
+  };
+}
+
+/**
+ * `groupedScan` for a column known to be unique: distinct = non-null and every
+ * value occurs once, so skip the grouping. MIN/MAX and the first values in
+ * order come straight from the key's index.
+ */
+function uniqueScan(db: Database, table: string, column: string): { agg: GroupedAgg; top: TopValue[] } {
+  const cq = ident(column);
+  const tq = ident(table);
+  const s = queryAll(
+    db,
+    `SELECT COUNT(${cq}) AS nn, COUNT(DISTINCT CASE WHEN ${cq} IS NOT NULL THEN typeof(${cq}) END) AS st,
+            MIN(${cq}) AS mn, MAX(${cq}) AS mx, AVG(${cq}) AS av
+     FROM ${tq}`,
+  )[0] ?? {};
+  const top = queryAll(db, `SELECT ${cq} AS v FROM ${tq} WHERE ${cq} IS NOT NULL ORDER BY ${cq} LIMIT ${TOP_VALUES}`)
+    .map((r) => ({ value: r.v, count: 1 }));
+  const nn = Number(s.nn) || 0;
+  return {
+    agg: { nn, dc: nn, st: Number(s.st) || 0, mn: s.mn, mx: s.mx, av: s.av != null ? Number(s.av) : null },
+    top,
+  };
 }
 
 function profileTable(
@@ -466,18 +501,21 @@ function profileTable(
   const fkMap = new Map(foreignKeys.map((fk) => [fk.from, fk]));
   const indexes = meta.type === 'table' ? getIndexes(db, name) : [];
 
+  // Columns the schema guarantees are distinct: a single-column primary key, or
+  // a full (non-partial) single-column unique index.
+  const pkCols = cols.filter((c) => c.pk > 0);
+  const uniqueCols = new Set(
+    indexes.filter((i) => i.unique && !i.partial && i.columns.length === 1).map((i) => i.columns[0]),
+  );
+  if (pkCols.length === 1) uniqueCols.add(pkCols[0].name);
+
   const columns: ColumnProfile[] = [];
   for (const c of cols) {
     onColumn?.(c.name);
-    columns.push(profileColumn(db, name, c, rowCount, fkMap));
+    columns.push(profileColumn(db, name, c, rowCount, fkMap, uniqueCols.has(c.name)));
   }
 
-  const sampleRows = queryAll(
-    db,
-    `SELECT * FROM ${ident(name)} LIMIT ${SAMPLE_ROWS}`,
-  );
-
-  return { name, type: meta.type, sql: meta.sql, rowCount, columns, foreignKeys, indexes, sampleRows };
+  return { name, type: meta.type, sql: meta.sql, rowCount, columns, foreignKeys, indexes };
 }
 
 export type ProgressFn = (done: number, total: number, label: string) => void;
@@ -549,7 +587,7 @@ export function profileDatabase(
 function unreadableTable(meta: TableMeta, error: string): TableProfile {
   return {
     name: meta.name, type: meta.type, sql: meta.sql, rowCount: 0,
-    columns: [], foreignKeys: [], indexes: [], sampleRows: [], error,
+    columns: [], foreignKeys: [], indexes: [], error,
   };
 }
 

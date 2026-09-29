@@ -12,20 +12,9 @@ export function download(filename: string, content: string, mime = 'text/plain')
   URL.revokeObjectURL(url);
 }
 
-/** The profile as JSON. Sample rows are dropped to keep the report focused on structure. */
+/** The profile as JSON. */
 export function profileToJson(profile: DatabaseProfile): string {
-  const slim = {
-    ...profile,
-    tables: profile.tables.map(stripSamples),
-    views: profile.views.map(stripSamples),
-  };
-  return JSON.stringify(slim, null, 2);
-}
-
-function stripSamples(t: TableProfile) {
-  const { sampleRows, ...rest } = t;
-  void sampleRows;
-  return rest;
+  return JSON.stringify(profile, null, 2);
 }
 
 /** A human-readable Markdown report of the database x-ray. */

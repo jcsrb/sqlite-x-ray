@@ -24,6 +24,8 @@ export interface ForeignKey {
 export interface IndexInfo {
   name: string;
   unique: boolean;
+  /** a partial index (CREATE INDEX … WHERE …) — uniqueness only holds for some rows */
+  partial?: boolean;
   columns: string[];
 }
 
@@ -90,7 +92,6 @@ export interface TableProfile {
   columns: ColumnProfile[];
   foreignKeys: ForeignKey[];
   indexes: IndexInfo[];
-  sampleRows: Record<string, unknown>[];
   /** set when the table's schema/data couldn't be read (e.g. unsupported virtual table) */
   error?: string;
 }

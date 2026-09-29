@@ -58,11 +58,18 @@
     return rows.map((r) => ({ value: r.value, count: Number(r.count) }));
   }
 
-  async function quantile(tableName: string, colName: string, p: number, n: number): Promise<unknown> {
-    const off = Math.max(0, Math.round(p * (n - 1)));
-    return client.scalar(
-      `SELECT ${ident(colName)} FROM ${ident(tableName)} WHERE ${ident(colName)} IS NOT NULL ORDER BY ${ident(colName)} LIMIT 1 OFFSET ${off}`,
+  /** Values at the given quantiles (0..1) of the non-null values, from one sort. */
+  async function quantiles(tableName: string, colName: string, ps: number[], n: number): Promise<unknown[]> {
+    const cq = ident(colName);
+    const offs = ps.map((p) => Math.max(0, Math.round(p * (n - 1))));
+    const rows = await client.query(
+      `SELECT rn, v FROM (
+         SELECT ${cq} AS v, ROW_NUMBER() OVER (ORDER BY ${cq}) - 1 AS rn
+         FROM ${ident(tableName)} WHERE ${cq} IS NOT NULL
+       ) WHERE rn IN (${[...new Set(offs)].join(', ')})`,
     );
+    const at = new Map(rows.map((r) => [Number(r.rn), r.v]));
+    return offs.map((o) => at.get(o));
   }
 
   async function loadExtra(tableName: string, colName: string): Promise<Extra[]> {
@@ -82,11 +89,7 @@
       ))[0];
       const variance = Number(s?.var);
       const std = variance > 0 ? Math.sqrt(variance) : 0;
-      const [p25, p50, p75] = await Promise.all([
-        quantile(tableName, colName, 0.25, n),
-        quantile(tableName, colName, 0.5, n),
-        quantile(tableName, colName, 0.75, n),
-      ]);
+      const [p25, p50, p75] = await quantiles(tableName, colName, [0.25, 0.5, 0.75], n);
       out.push(
         { label: 'median', value: fmtN(p50) },
         { label: 'p25', value: fmtN(p25) },
@@ -95,7 +98,7 @@
         { label: 'sum', value: fmtN(s?.sum) },
       );
     } else if (isDate && n > 0) {
-      const med = await quantile(tableName, colName, 0.5, n);
+      const [med] = await quantiles(tableName, colName, [0.5], n);
       out.push({ label: 'median', value: formatCell(med) });
       const days = await client.scalar<number>(`SELECT COUNT(DISTINCT date(${cq})) FROM ${tq} WHERE ${cq} IS NOT NULL`);
       if (days != null) out.push({ label: 'distinct days', value: formatNumber(days) });
