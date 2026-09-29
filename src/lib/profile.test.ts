@@ -1,13 +1,12 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { createRequire } from 'node:module';
 import initSqlJs, { type Database, type SqlJsStatic } from 'sql.js';
 import { profileDatabase } from './profile';
 
 let SQL: SqlJsStatic;
 
 beforeAll(async () => {
-  const require = createRequire(import.meta.url);
-  SQL = await initSqlJs({ locateFile: (f) => require.resolve(`sql.js/dist/${f}`) });
+  // vitest runs from the project root.
+  SQL = await initSqlJs({ locateFile: (f) => `node_modules/sql.js/dist/${f}` });
 });
 
 function db(ddl: string): Database {
