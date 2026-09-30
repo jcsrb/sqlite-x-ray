@@ -12,20 +12,9 @@ export function download(filename: string, content: string, mime = 'text/plain')
   URL.revokeObjectURL(url);
 }
 
-/** The profile as JSON. Sample rows are dropped to keep the report focused on structure. */
+/** The profile as JSON. */
 export function profileToJson(profile: DatabaseProfile): string {
-  const slim = {
-    ...profile,
-    tables: profile.tables.map(stripSamples),
-    views: profile.views.map(stripSamples),
-  };
-  return JSON.stringify(slim, null, 2);
-}
-
-function stripSamples(t: TableProfile) {
-  const { sampleRows, ...rest } = t;
-  void sampleRows;
-  return rest;
+  return JSON.stringify(profile, null, 2);
 }
 
 /** A human-readable Markdown report of the database x-ray. */
@@ -58,12 +47,13 @@ export function profileToMarkdown(profile: DatabaseProfile): string {
 
   for (const t of [...profile.tables, ...profile.views]) {
     L.push(`## ${t.name} (${t.type}) — ${t.rowCount.toLocaleString()} rows`, '');
+    if (t.sample) L.push(`_Profiled from a random sample of ${t.sample.rows.toLocaleString()} rows; ≈ marks estimates._`, '');
     L.push('| Column | Type | Kind | Distinct | Null % | Min | Max |');
     L.push('|---|---|---|--:|--:|---|---|');
     for (const c of t.columns) {
       const mark = c.pk ? ' 🔑' : c.fk ? ' 🔗' : '';
       L.push(
-        `| ${c.name}${mark} | ${c.declaredType} | ${c.kind} | ${c.distinctCount.toLocaleString()} | ` +
+        `| ${c.name}${mark} | ${c.declaredType} | ${c.kind} | ${c.approx ? '≈' : ''}${c.distinctCount.toLocaleString()} | ` +
           `${Math.round(c.nullFraction * 100)}% | ${fmt(c.min)} | ${fmt(c.max)} |`,
       );
     }

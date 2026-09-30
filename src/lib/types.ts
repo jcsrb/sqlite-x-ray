@@ -24,6 +24,8 @@ export interface ForeignKey {
 export interface IndexInfo {
   name: string;
   unique: boolean;
+  /** a partial index (CREATE INDEX … WHERE …) — uniqueness only holds for some rows */
+  partial?: boolean;
   columns: string[];
 }
 
@@ -50,6 +52,8 @@ export interface ColumnProfile {
   notNull: boolean;
   /** a GENERATED ALWAYS AS (…) column */
   generated?: boolean;
+  /** distinct count, top-value and histogram counts are estimates from a sample */
+  approx?: boolean;
   fk?: ForeignKey;
   /** non-null value count */
   count: number;
@@ -90,9 +94,10 @@ export interface TableProfile {
   columns: ColumnProfile[];
   foreignKeys: ForeignKey[];
   indexes: IndexInfo[];
-  sampleRows: Record<string, unknown>[];
   /** set when the table's schema/data couldn't be read (e.g. unsupported virtual table) */
   error?: string;
+  /** set when the table was too large to profile in full: columns come from a random sample */
+  sample?: { rows: number };
 }
 
 /** Open the row-inspector overlay with a set of full rows. */
